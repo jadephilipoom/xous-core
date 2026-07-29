@@ -2,6 +2,7 @@
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use crate::erase::Erasure;
 
 #[allow(unused_imports)]
 #[cfg(feature = "bao1x")]
@@ -39,11 +40,12 @@ impl Error {
 pub struct Repl {
     cmdline: String,
     do_cmd: bool,
+    erasure: Erasure,
 }
 
 const COLUMNS: usize = 4;
 impl Repl {
-    pub fn new() -> Self { Self { cmdline: String::new(), do_cmd: false } }
+    pub fn new() -> Self { Self { cmdline: String::new(), do_cmd: false, erasure: Erasure::new() } }
 
     #[allow(dead_code)]
     pub fn init_cmd(&mut self, cmd: &str) {
@@ -166,6 +168,39 @@ impl Repl {
                 } else {
                     return Err(Error::help(
                         "Help: poke <addr> <value> [count], addr/value is in hex, count in decimal",
+                    ));
+                }
+            }
+            "erase" => {
+                if args.len() >= 1 {
+                    match args[0].as_str() {
+                        "len" => {
+                            crate::println!("{:?} bytes remaining", self.erasure.len());
+                        }
+                        "restart" => {
+                            self.erasure = Erasure::new();
+                        }
+                        "write" => {
+                            if args.len() != 2 || args[1].len() % 8 != 0 {
+                                return Err(Error::help(
+                                    "Help: erase write <value>, value is in hex and a multiple of 4 bytes",
+                                ));
+                            }
+                            for i in 0..(args[1].len() / 8) {
+                                let value = u32::from_str_radix(&args[1][i*8..i*8+7], 16)
+                                    .map_err(|_| Error::help("Value is in hex, no leading 0x"))?;
+                                self.erasure.write_u32(value);
+                            }
+                        }
+                        _ => {
+                            return Err(Error::help(
+                                "Help: erase {len, restart, write <value>}, value is in hex",
+                            ));
+                        }
+                    }
+                } else {
+                    return Err(Error::help(
+                        "Help: erase {len, restart, write <value>}, value is in hex",
                     ));
                 }
             }
