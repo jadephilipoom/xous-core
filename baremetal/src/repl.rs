@@ -182,26 +182,17 @@ impl Repl {
                         }
                         "write" => {
                             let hex_str = &args[1];
+                            let addr = self.erasure.peek();
                             if args.len() != 2 || hex_str.len() % 8 != 0 {
                                 return Err(Error::help(
                                     "Help: erase write <value>, value is in hex and a multiple of 4 bytes",
                                 ));
                             }
-                            let value = u32::from_str_radix(&args[1], 16)
-                                .map_err(|_| Error::help("Poke value is in hex, no leading 0x"))?;
-                            let addr = self.erasure.peek();
-                            // safety: it's not safe to do this, the user pokes at their own risk
-                            let poke = unsafe { core::slice::from_raw_parts_mut(addr as *mut u32, hex_str.len() / 8) };
-                            for d in poke.iter_mut() {
-                                *d = value;
-                            }
-                            /*
                             for i in 0..(hex_str.len() / 8) {
                                 let value = u32::from_str_radix(&args[1][i*8..(i+1)*8], 16)
                                     .map_err(|_| Error::help("Value is in hex, no leading 0x"))?;
                                 self.erasure.write_u32(value);
                             }
-                            */
                             crate::println!("wrote {:?} bytes starting at {:x} and ending at {:x}", hex_str.len() / 2, addr, self.erasure.peek());
                         }
                         _ => {

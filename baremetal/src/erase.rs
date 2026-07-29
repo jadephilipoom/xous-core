@@ -99,7 +99,6 @@ impl MemoryTraversal {
         let rram_end = utralib::HW_RERAM_MEM + utralib::HW_RERAM_MEM_LEN;
         let rram_block_start = rram_end - bao1x_api::RRAM_STORAGE_LEN;
         let rram_block_len = bao1x_api::RRAM_STORAGE_LEN;
-        let rram_block = Region::new(rram_block_start as u64, rram_block_len as u64);
         MemoryTraversal {
             idx: 0,
             blocks: [rram_block],
