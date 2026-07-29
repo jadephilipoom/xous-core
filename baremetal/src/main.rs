@@ -8,6 +8,9 @@ mod asm;
 mod platform;
 mod repl;
 
+// TODO: make an optional feature
+mod erase;
+
 use alloc::collections::VecDeque;
 use core::cell::RefCell;
 #[cfg(feature = "bao1x-usb")]
