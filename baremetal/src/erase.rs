@@ -1,13 +1,10 @@
 // use aes::cipher::{RegionDecrypt, RegionEncrypt, KeyInit};
 // use aes::{Aes128, Region};
-use bao1x_api::offsets;
-use bao1x_hal::rram;
 
 /// Traversal through a contiguous memory block, reading or writing each address exactly once.
 struct Region {
-    start: u64,
-    end: u64,
     current: u64,
+    end: u64,
 }
 
 impl Region {
@@ -20,17 +17,16 @@ impl Region {
             panic!("Region length of {:?} is not a multiple of 4 bytes", len);
         }
         Region {
-            start: start,
-            end: start + len,
             current: start,
+            end: start + len,
         }
     }
 
-    pub fn peek(&self) -> u64 {
+    fn peek(&self) -> u64 {
         return self.current;
     }
 
-    pub fn len(&self) -> usize {
+    fn len(&self) -> usize {
         return (self.end - self.current) as usize;
     }
 
@@ -44,7 +40,7 @@ impl Region {
         }
     }
 
-    pub fn write_u32(&mut self, value: u32) {
+    fn write_u32(&mut self, value: u32) {
         let addr = self.current as *mut u32;
         // safety: if the whole block is a writeable memory region and callers only ever increment
         // the block through increment(), we ensure that the addr is a u32-aligned valid writeable
@@ -53,7 +49,7 @@ impl Region {
         self.increment(4);
     }
 
-    pub fn read_u32(&mut self) -> u32 {
+    fn read_u32(&mut self) -> u32 {
         let addr = self.current as *const u32;
         // safety: if the whole block is a readable memory region and callers only ever increment
         // the block through increment(), we ensure that the addr is a u32-aligned valid readable
@@ -136,6 +132,11 @@ impl Erasure {
     /// Remaining length to fill.
     pub fn len(&self) -> usize {
         self.traversal.len()
+    }
+
+    /// Next address to fill.
+    pub fn peek(&self) -> u64 {
+        self.traversal.peek()
     }
 
     /// Write new ciphertext data.

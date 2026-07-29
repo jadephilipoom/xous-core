@@ -181,16 +181,19 @@ impl Repl {
                             self.erasure = Erasure::new();
                         }
                         "write" => {
-                            if args.len() != 2 || args[1].len() % 8 != 0 {
+                            let hex_str = &args[1];
+                            if args.len() != 2 || hex_str.len() % 8 != 0 {
                                 return Err(Error::help(
                                     "Help: erase write <value>, value is in hex and a multiple of 4 bytes",
                                 ));
                             }
-                            for i in 0..(args[1].len() / 8) {
+                            let addr = self.erasure.peek();
+                            for i in 0..(hex_str.len() / 8) {
                                 let value = u32::from_str_radix(&args[1][i*8..i*8+7], 16)
                                     .map_err(|_| Error::help("Value is in hex, no leading 0x"))?;
                                 self.erasure.write_u32(value);
                             }
+                            crate::println!("wrote {:?} bytes starting at {:x}", hex_str.len() / 2, addr);
                         }
                         _ => {
                             return Err(Error::help(
