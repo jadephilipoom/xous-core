@@ -46,6 +46,7 @@ impl Region {
         // the block through increment(), we ensure that the addr is a u32-aligned valid writeable
         // address and the entire write fits within the region.
         unsafe { *addr = value };
+
         self.increment(4);
     }
 
@@ -57,6 +58,28 @@ impl Region {
         let value = unsafe { *addr };
         self.increment(4);
         return value;
+    }
+
+    fn write_slice(&mut self, src: &[u8]) {
+        // safety: if the whole block is a writeable memory region and callers only ever increment
+        // the block through increment(), we ensure that the addr is a u32-aligned valid writeable
+        // address and the entire write fits within the region.
+        let dst = unsafe { core::slice::from_raw_parts_mut(self.current as *mut u8, src.len()) };
+        dst.copy_from_slice(src);
+        self.increment(src.len());
+    }
+
+    fn read_slice_no_increment(&mut self, dst: &mut [u8]) {
+        // safety: if the whole block is a readable memory region and callers only ever increment
+        // the block through increment(), we ensure that the addr is a u32-aligned valid readable
+        // address and the entire write fits within the region.
+        let src = unsafe { core::slice::from_raw_parts(self.current as *const u8, dst.len()) };
+        dst.copy_from_slice(src);
+    }
+
+    fn read_slice(&mut self, dst: &mut [u8]) {
+        self.read_slice_no_increment(dst);
+        self.increment(dst.len());
     }
 }
 
@@ -107,7 +130,7 @@ impl MemoryTraversal {
         while self.blocks[self.idx].len() < 4 {
             self.advance_block();
         }
-        self.blocks[self.idx].write_u32(value);
+        self.blocks[self.idx].write_slice(value.to_le_bytes().as_slice());
     }
 
     fn read_u32(&mut self) -> u32 {

@@ -193,7 +193,7 @@ impl Repl {
                                     .map_err(|_| Error::help("Value is in hex, no leading 0x"))?;
                                 self.erasure.write_u32(value);
                             }
-                            crate::println!("wrote {:?} bytes starting at {:x}", hex_str.len() / 2, addr);
+                            crate::println!("wrote {:?} bytes starting at {:x} and ending at {:x}", hex_str.len() / 2, addr, self.erasure.peek());
                         }
                         _ => {
                             return Err(Error::help(
