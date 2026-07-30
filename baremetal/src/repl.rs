@@ -125,6 +125,9 @@ impl Repl {
                 }
             }
             "peek" => {
+                // Without this, we sometimes see unsuccessful writes as successful.
+                bao1x_hal::cache_flush();
+
                 if args.len() == 1 || args.len() == 2 {
                     let addr = usize::from_str_radix(&args[0], 16)
                         .map_err(|_| Error::help("Peek address is in hex, no leading 0x"))?;
@@ -164,10 +167,74 @@ impl Repl {
                     for d in poke.iter_mut() {
                         *d = value;
                     }
+
                     crate::println!("Poked {:x} into {:x}, {} times", value, addr, count);
                 } else {
                     return Err(Error::help(
                         "Help: poke <addr> <value> [count], addr/value is in hex, count in decimal",
+                    ));
+                }
+            }
+            "autopeek" => {
+                // Without this, we sometimes see unsuccessful writes as successful.
+                bao1x_hal::cache_flush();
+
+                if args.len() == 3 {
+                    let mut addr = u32::from_str_radix(&args[0], 16)
+                        .map_err(|_| Error::help("Peek address is in hex, no leading 0x"))?;
+
+                    let spacing = u32::from_str_radix(&args[1], 10)
+                        .map_err(|_| Error::help("Spacing is in decimal"))?;
+
+                    let count = u32::from_str_radix(&args[2], 10)
+                        .map_err(|_| Error::help("Count is in decimal"))?;
+
+                    for _ in 0..count {
+                        // safety: it's not safe to do this, the user peeks at their own risk
+                        let peek = unsafe { core::slice::from_raw_parts(addr as *const u32, 1) };
+                        for (i, &d) in peek.iter().enumerate() {
+                            if (i % COLUMNS) == 0 {
+                                crate::print!("\n\r{:08x}: ", addr as usize + i * size_of::<u32>());
+                            }
+                            crate::print!("{:08x} ", d);
+                        }
+                        crate::println!("");
+
+                        addr += (spacing * 4) as u32;
+                    }
+                } else {
+                    return Err(Error::help("Help: autopeek <addr> [spacing] [count], addr is in hex, spacing and count in decimal"));
+                }
+            }
+            "autopoke" => {
+                if args.len() == 2 || args.len() == 3 || args.len() == 4 {
+                    let mut addr: u32 = u32::from_str_radix(&args[0], 16)
+                        .map_err(|_| Error::help("Poke address is in hex, no leading 0x"))?;
+
+                    let value = u32::from_str_radix(&args[1], 16)
+                        .map_err(|_| Error::help("Poke value is in hex, no leading 0x"))?;
+
+                    let spacing = u32::from_str_radix(&args[2], 10)
+                        .map_err(|_| Error::help("Spacing is in decimal"))?;
+
+                    let count = u32::from_str_radix(&args[3], 10)
+                        .map_err(|_| Error::help("Count is in decimal"))?;
+
+                    for _ in 0..count {
+                        // safety: it's not safe to do this, the user pokes at their own risk
+                        //
+                        let poke = unsafe { core::slice::from_raw_parts_mut(addr as *mut u32, 1) };
+                        for d in poke.iter_mut() {
+                            *d = value;
+                        }
+
+                        crate::println!("Poked {:x} into {:x}", value, addr);
+                        
+                        addr += (spacing * 4) as u32;
+                    }
+                } else {
+                    return Err(Error::help(
+                        "Help: autopoke <addr> <value> [spacing] [count], addr/value is in hex, count and spacing in decimal",
                     ));
                 }
             }
@@ -183,17 +250,19 @@ impl Repl {
                         "write" => {
                             let hex_str = &args[1];
                             let addr = self.erasure.peek();
-                            if args.len() != 2 || hex_str.len() % 8 != 0 {
+                            if args.len() != 2 {
                                 return Err(Error::help(
-                                    "Help: erase write <value>, value is in hex and a multiple of 4 bytes",
+                                    "Help: erase write <value>, value is in hex",
                                 ));
                             }
-                            for i in 0..(hex_str.len() / 8) {
-                                let value = u32::from_str_radix(&args[1][i*8..(i+1)*8], 16)
+                            let mut data: Vec<u8> = Vec::new();
+                            for i in 0..(hex_str.len() / 2) {
+                                let value = u8::from_str_radix(&args[1][2*i..(i+1)*2], 16)
                                     .map_err(|_| Error::help("Value is in hex, no leading 0x"))?;
-                                self.erasure.write_u32(value);
+                                data.push(value);
                             }
-                            crate::println!("wrote {:?} bytes starting at {:x} and ending at {:x}", hex_str.len() / 2, addr, self.erasure.peek());
+                            self.erasure.write_slice(data.as_slice());
+                            crate::println!("wrote {:?} bytes starting at {:x} and ending at {:x}", data.len(), addr, self.erasure.peek());
                         }
                         _ => {
                             return Err(Error::help(
@@ -337,6 +406,7 @@ impl Repl {
                         };
                         let mut rram = bao1x_hal::rram::Reram::new();
                         rram.write_slice(addr, poke_inner).ok();
+
                         crate::println!("RRAM written {:x} into {:x}, {} times", value, addr, count);
                     } else {
                         return Err(Error::help(

@@ -1,92 +1,112 @@
-// use aes::cipher::{RegionDecrypt, RegionEncrypt, KeyInit};
-// use aes::{Aes128, Region};
+use bao1x_hal::rram::Reram;
+use alloc::vec::Vec;
+use alloc::boxed::Box;
 
-/// Traversal through a contiguous memory block, reading or writing each address exactly once.
-struct Region {
-    current: u64,
-    end: u64,
+/// Represents a contiguous block of memory to overwrite or read back.
+trait MemRegion {
+    /// Start address.
+    fn start(&self) -> u32;
+    /// End address.
+    fn end(&self) -> u32;
+    /// Total size of the region in bytes.
+    fn len(&self) -> usize {
+        (self.end() - self.start()) as usize
+    }
+    /// Granularity of writes to the region. The start address should always remain aligned.
+    fn min_update_size(&self) -> usize;
+    /// Write a slice to the start of the region. Returns a BadAlignment error if the update is not
+    /// a multiple of the minimum update size.
+    fn write_slice(&self, data: &[u8]) -> Result<(), xous::Error>;
+    /// Returns a slice representing a prefix of the region.
+    fn get_slice(&self, len: usize) -> Result<&[u8], xous::Error>;
+    /// Clip off a portion of the start of the region.
+    fn advance(&mut self, nbytes: usize) -> Result<(), xous::Error>;
 }
 
-impl Region {
-    fn new(start: u64, len: u64) -> Self {
-        if start > u64::MAX - len {
-            // TODO: remove details from panics to reduce code size
-            panic!("Integer overflow in block creation (start={:?}, len={:?})!", start, len);
-        }
-        if len % 4 != 0{
-            panic!("Region length of {:?} is not a multiple of 4 bytes", len);
-        }
-        Region {
-            current: start,
-            end: start + len,
-        }
-    }
+struct ReramRegion {
+    start: u32,
+    end: u32,
+}
 
-    fn peek(&self) -> u64 {
-        return self.current;
-    }
-
-    fn len(&self) -> usize {
-        return (self.end - self.current) as usize;
-    }
-
-    fn increment(&mut self, nbytes: usize) {
-        if self.current > self.end - nbytes as u64 {
-            panic!("Increment ({:?} + {:?}) overflowed block!", self.current, nbytes);
+impl ReramRegion {
+    // RRAM minimum update granularity is 32 bytes.
+    const MIN_UPDATE_BYTES: usize = 32;
+ 
+    fn new(baremetal_image_text_reserved: usize) -> Self {
+        // Get the writeable section of RRAM that is past boot1 and the specified range reserved for
+        // the baremetal image.
+        let mut start = bao1x_api::BAREMETAL_START + baremetal_image_text_reserved;
+        let end = utralib::HW_RERAM_MEM + bao1x_api::RRAM_STORAGE_LEN;
+        // Align the start to the update granularity.
+        if start % Self::MIN_UPDATE_BYTES != 0 {
+            start += Self::MIN_UPDATE_BYTES - start % Self::MIN_UPDATE_BYTES;
         }
-        self.current += nbytes as u64;
-        if self.current % 4 != 0 {
-            panic!("Region address misaligned: {:?}", self.current);
+        if end < start {
+            panic!("Calculated a negative-size RRAM! ({:x}-{:x})", start, end);
+        }
+        ReramRegion {
+            start: start as u32,
+            end: end as u32,
         }
     }
+}
 
-    fn write_u32(&mut self, value: u32) {
-        let addr = self.current as *mut u32;
-        // safety: if the whole block is a writeable memory region and callers only ever increment
-        // the block through increment(), we ensure that the addr is a u32-aligned valid writeable
-        // address and the entire write fits within the region.
-        unsafe { *addr = value };
-
-        self.increment(4);
+impl MemRegion for ReramRegion {
+    fn start(&self) -> u32 {
+        self.start
+    }
+    
+    fn end(&self) -> u32 {
+        self.end
+    }
+    
+    fn min_update_size(&self) -> usize {
+        Self::MIN_UPDATE_BYTES
     }
 
-    fn read_u32(&mut self) -> u32 {
-        let addr = self.current as *const u32;
-        // safety: if the whole block is a readable memory region and callers only ever increment
-        // the block through increment(), we ensure that the addr is a u32-aligned valid readable
-        // address and the entire read fits within the region.
-        let value = unsafe { *addr };
-        self.increment(4);
-        return value;
+    fn write_slice(&self, data: &[u8]) -> Result<(), xous::Error> {
+        if data.len() % Self::MIN_UPDATE_BYTES != 0 {
+            return Err(xous::Error::BadAlignment);
+        }
+        let offset = self.start as usize - utralib::HW_RERAM_MEM;
+        let mut rram = Reram::new();
+        let len = rram.write_slice(offset, data)?;
+        if len != data.len() {
+            panic!("Written RRAM data length {:?} does not match input length {:?}", len, data.len());
+        }
+        Ok(())
     }
 
-    fn write_slice(&mut self, src: &[u8]) {
-        // safety: if the whole block is a writeable memory region and callers only ever increment
-        // the block through increment(), we ensure that the addr is a u32-aligned valid writeable
-        // address and the entire write fits within the region.
-        let dst = unsafe { core::slice::from_raw_parts_mut(self.current as *mut u8, src.len()) };
-        dst.copy_from_slice(src);
-        self.increment(src.len());
+    fn get_slice(&self, len: usize) -> Result<&[u8], xous::Error> {
+        if self.len() < len {
+            return Err(xous::Error::Unavailable)
+        }
+
+        // safety: this is safe if the caller has ensured that the RRAM region is in fact readable.
+        let bytes = unsafe { core::slice::from_raw_parts(
+            self.start as *const u8,
+            self.len()) };
+        Ok(bytes)
     }
 
-    fn read_slice_no_increment(&mut self, dst: &mut [u8]) {
-        // safety: if the whole block is a readable memory region and callers only ever increment
-        // the block through increment(), we ensure that the addr is a u32-aligned valid readable
-        // address and the entire write fits within the region.
-        let src = unsafe { core::slice::from_raw_parts(self.current as *const u8, dst.len()) };
-        dst.copy_from_slice(src);
+    fn advance(&mut self, nbytes: usize) -> Result<(), xous::Error> {
+        if nbytes % 32 != 0 {
+            return Err(xous::Error::BadAlignment);
+        }
+        if self.len() < nbytes {
+            return Err(xous::Error::Unavailable)
+        }
+        self.start += nbytes as u32;
+        Ok(())
     }
 
-    fn read_slice(&mut self, dst: &mut [u8]) {
-        self.read_slice_no_increment(dst);
-        self.increment(dst.len());
-    }
 }
 
 /// Traverses through multiple non-contiguous memory blocks.
 struct MemoryTraversal {
     idx: usize,
-    blocks: [Region;1],
+    pending: Vec<u8>,
+    blocks: [Box<dyn MemRegion>;1],
     // TODO: investigate/add mem regions from utralib/src/generated/bao1x.rs
     // TODO: maybe add a block of constant ciphertext to the program to start so it fills all of the
     // boot1 region?
@@ -94,14 +114,19 @@ struct MemoryTraversal {
 
 impl MemoryTraversal {
     fn new() -> Self {
-        // Determine the dimensions of the writeable part of the RRAM memory block. This is where
-        // boot0 and boot1 live, so not all of this block is writeable.
-        let rram_end = utralib::HW_RERAM_MEM + utralib::HW_RERAM_MEM_LEN;
-        let rram_block_start = rram_end - bao1x_api::RRAM_STORAGE_LEN;
-        let rram_block_len = bao1x_api::RRAM_STORAGE_LEN;
+        // TODO: get a tighter bound here.
+        let baremetal_image_reserved = 100000;
+        let blocks: [Box<dyn MemRegion>;1] = [
+            Box::new(ReramRegion::new(baremetal_image_reserved)),
+        ];
+        let max_min_update = blocks.iter()
+            .max_by_key(|b| b.min_update_size())
+            .expect("Blocks should be nonempty")
+            .min_update_size();
         MemoryTraversal {
             idx: 0,
-            blocks: [rram_block],
+            pending: Vec::with_capacity(max_min_update),
+            blocks: blocks,
         }
     }
 
@@ -113,8 +138,8 @@ impl MemoryTraversal {
         return total;
     }
 
-    fn peek(&self) -> u64 {
-        self.blocks[self.idx].peek()
+    fn peek(&self) -> u32 {
+        self.blocks[self.idx].start()
     }
 
     fn advance_block(&mut self) {
@@ -125,18 +150,55 @@ impl MemoryTraversal {
         }
     }
 
-    fn write_u32(&mut self, value: u32) {
-        while self.blocks[self.idx].len() < 4 {
-            self.advance_block();
+    fn write_slice(&mut self, data: &[u8]) -> Result<(), xous::Error> {
+        let min_size = self.blocks[self.idx].min_update_size();
+
+        // If we don't have enough data for a write, update pending and exit.
+        if self.pending.len() + data.len() < min_size {
+            self.pending.extend_from_slice(data);
+            return Ok(());
         }
-        self.blocks[self.idx].write_slice(value.to_le_bytes().as_slice());
+
+        // If there's not enough space in the block, skip to the next one and retry.
+        if self.blocks[self.idx].len() == 0 {
+            self.advance_block();
+            return self.write_slice(data);
+        } else if self.blocks[self.idx].len() < min_size {
+            // If this happens, we might get mismatches between write and read patterns.
+            panic!("Block size is not a multiple of minimum update size!");
+        }
+
+        // Fill, write, and clear the pending vector if present.
+        let mut rem_data = data;
+        if self.pending.len() != 0 {
+            let (head, tail) = data.split_at(min_size - self.pending.len());
+            self.pending.extend_from_slice(head);
+            self.blocks[self.idx].write_slice(self.pending.as_slice())?;
+            self.blocks[self.idx].advance(self.pending.len())?;
+            self.pending.clear();
+            rem_data = tail;
+        }
+
+        // Find the greatest multiple of the min update size that fits in both data and the
+        // remainder of the current block.
+        let cutoff = self.blocks[self.idx].len().min(rem_data.len());
+        let cutoff_aligned = cutoff - (cutoff % min_size);
+        let (head, tail) = rem_data.split_at(cutoff_aligned);
+        self.blocks[self.idx].write_slice(head)?;
+        self.blocks[self.idx].advance(head.len())?;
+        return self.write_slice(tail);
     }
 
-    fn read_u32(&mut self) -> u32 {
-        while self.blocks[self.idx].len() < 4 {
+    /// Returns a contiguous slice of data. If possible, the slice has the requested length; it may
+    /// be shorter if that much contiguous data is not available.
+    fn read_slice(&mut self, len: usize) -> Result<&[u8], xous::Error> {
+        if self.blocks[self.idx].len() == 0 {
             self.advance_block();
+            self.read_slice(len)
+        } else {
+            let max_len = self.blocks[self.idx].len();
+            self.blocks[self.idx].get_slice(len.min(max_len))
         }
-        return self.blocks[self.idx].read_u32();
     }
 }
 
@@ -157,13 +219,16 @@ impl Erasure {
     }
 
     /// Next address to fill.
-    pub fn peek(&self) -> u64 {
+    pub fn peek(&self) -> u32 {
         self.traversal.peek()
     }
 
-    /// Write new ciphertext data.
-    pub fn write_u32(&mut self, data: u32) {
-        self.traversal.write_u32(data);
+    pub fn write_slice(&mut self, data: &[u8]) {
+        self.traversal.write_slice(data).unwrap()
+    }
+
+    pub fn read_slice(&mut self, len: usize) -> &[u8] {
+        self.traversal.read_slice(len).unwrap()
     }
 
     /*
