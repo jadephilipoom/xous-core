@@ -613,9 +613,11 @@ dependencies = [
 name = "baremetal"
 version = "0.1.0"
 dependencies = [
+ "aes",
  "bao1x-api 0.1.0",
  "bao1x-hal",
  "base64 0.22.1",
+ "cipher",
  "critical-section",
  "digest 0.10.7",
  "ed25519-dalek-bao1x",

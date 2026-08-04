@@ -264,6 +264,36 @@ impl Repl {
                             self.erasure.write_slice(data.as_slice());
                             crate::println!("wrote {:?} bytes starting at {:x} and ending at {:x}", data.len(), addr, self.erasure.peek());
                         }
+                        "key" => {
+                            if args.len() != 3 {
+                                return Err(Error::help(
+                                    "Help: erase key <seed> <keyblock>, seed and keyblock in hex",
+                                ));
+                            }
+                            let mut seed: Vec<u8> = Vec::new();
+                            for i in 0..(args[1].len() / 2) {
+                                let b = u8::from_str_radix(&args[1][i*2..(i+1)*2], 16)
+                                    .map_err(|_| Error::help("Value is in hex, no leading 0x"))?;
+                                seed.push(b);
+                            }
+                            let mut key_block: Vec<u8> = Vec::new();
+                            for i in 0..(args[2].len() / 2) {
+                                let b = u8::from_str_radix(&args[2][i*2..(i+1)*2], 16)
+                                    .map_err(|_| Error::help("Value is in hex, no leading 0x"))?;
+                                key_block.push(b);
+                            }
+                            if seed.len() != 16 || key_block.len() != 16 {
+                                return Err(Error::help(
+                                    "Help: erase key <seed> <keyblock>, seed and keyblock must be exactly 16 bytes each",
+                                ));
+                            }
+                            let key = self.erasure.recover_key(seed.as_slice(), key_block.as_slice());
+                            let mut key_hex = String::new();
+                            for b in key {
+                                key_hex.push_str(format!("{:02x}", b).as_str());
+                            }
+                            crate::println!("key = {:?}", key_hex);
+                        }
                         _ => {
                             return Err(Error::help(
                                 "Help: erase {len, restart, write <value>}, value is in hex",
