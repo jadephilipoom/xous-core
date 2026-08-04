@@ -74,11 +74,14 @@ impl MemRegion for ReramRegion {
         if data.len() % Self::MIN_UPDATE_BYTES != 0 {
             return Err(xous::Error::BadAlignment);
         }
+        if data.len() > self.len() {
+            return Err(xous::Error::MemoryInUse);
+        }
         let offset = self.start as usize - utralib::HW_RERAM_MEM;
         let mut rram = Reram::new();
         let len = rram.write_slice(offset, data)?;
         if len != data.len() {
-            panic!("Written RRAM data length {:?} does not match input length {:?}", len, data.len());
+            return Err(xous::Error::InternalError);
         }
         Ok(())
     }
@@ -97,13 +100,13 @@ impl MemRegion for ReramRegion {
 
     fn advance(&mut self, nbytes: usize) -> Result<(), xous::Error> {
         if nbytes % 32 != 0 {
-            return Err(xous::Error::BadAlignment);
+            Err(xous::Error::BadAlignment)
+        } else if self.len() < nbytes {
+            Err(xous::Error::Unavailable)
+        } else {
+            self.start += nbytes as u32;
+            Ok(())
         }
-        if self.len() < nbytes {
-            return Err(xous::Error::Unavailable)
-        }
-        self.start += nbytes as u32;
-        Ok(())
     }
 
 }
@@ -148,12 +151,12 @@ impl MemoryTraversal {
         self.blocks[self.idx].start()
     }
 
-    fn advance_block(&mut self) {
+    fn advance_block(&mut self) -> Result<(), xous::Error> {
         if self.idx < self.blocks.len() - 1 {
             self.idx += 1;
+            Ok(())
         } else {
-            crate::println!("Region index overflow!");
-            panic!("Region index overflow!");
+            Err(xous::Error::OutOfMemory)
         }
     }
 
@@ -168,7 +171,7 @@ impl MemoryTraversal {
 
         // If there's not enough space in the block, skip to the next one and retry.
         if self.blocks[self.idx].len() == 0 {
-            self.advance_block();
+            self.advance_block()?;
             return self.write_slice(data);
         } else if self.blocks[self.idx].len() < min_size {
             // If this happens, we might get mismatches between write and read patterns. However,
@@ -202,7 +205,7 @@ impl MemoryTraversal {
     /// be shorter if that much contiguous data is not available.
     fn read_slice(&mut self, len: usize) -> Result<&[u8], xous::Error> {
         if self.blocks[self.idx].len() == 0 {
-            self.advance_block();
+            self.advance_block()?;
             self.read_slice(len)
         } else {
             let max_len = self.blocks[self.idx].len();
@@ -265,12 +268,9 @@ impl ShiftXor {
         }
     }
 
-    fn absorb(&mut self, ciphertext: &[u8]) {
-        crate::println!("Absorbing {:?} bytes", ciphertext.len());
+    fn absorb(&mut self, ciphertext: &[u8]) -> Result<(), xous::Error> {
         if ciphertext.len() != Self::CHUNK_BYTES {
-            // TODO: fix
-            // panic!("Invalid block length for ShiftXOR: {:?}", ciphertext.len());
-            return;
+            return Err(xous::Error::BadAlignment);
         }
 
         // XOR the key block with a cyclic shift of the ciphertext.
@@ -283,6 +283,7 @@ impl ShiftXor {
             let ct = ct_lower | (ct_upper << (8 - (shift % 8)));
             self.key_block[i] ^= ct;
         }
+        Ok(())
     }
 
     fn key(&self) -> &[u8] {
@@ -320,35 +321,32 @@ impl Erasure {
     }
 
     /// Recover the key from the ciphertext, shift seed, and key block.
-    pub fn recover_key(&self, shift_seed: &[u8], key_block: &[u8]) -> [u8;16] {
+    pub fn recover_key(&self, shift_seed: &[u8], key_block: &[u8]) -> Result<[u8;16], xous::Error> {
         let mut shifter = ShiftXor::new(shift_seed, key_block);
         let mut reader = MemoryTraversal::new();
         let nchunks = self.bytes_written.div_ceil(ShiftXor::CHUNK_BYTES);
-        crate::println!("nchunks={:?}", nchunks);
         for _ in 0..nchunks {
-            crate::println!("Reading chunk...");
-            let chunk = reader.read_slice(ShiftXor::CHUNK_BYTES)
-                .expect("Read error!");
-            crate::println!("Absorbing chunk (length {:?})...", chunk.len());
+            let chunk = reader.read_slice(ShiftXor::CHUNK_BYTES)?;
             if chunk.len() == ShiftXor::CHUNK_BYTES {
-                shifter.absorb(chunk);
+                shifter.absorb(chunk)?;
             } else if chunk.len() < ShiftXor::CHUNK_BYTES {
                 let mut v = Vec::new();
                 v.extend_from_slice(chunk);
                 while v.len() < ShiftXor::CHUNK_BYTES {
                     let next_chunk = reader
-                        .read_slice(ShiftXor::CHUNK_BYTES - v.len())
-                        .expect("Read error!");
+                        .read_slice(ShiftXor::CHUNK_BYTES - v.len())?;
                     v.extend_from_slice(next_chunk);
                 }
-                shifter.absorb(v.as_slice());
+                shifter.absorb(v.as_slice())?;
             } else {
                 // This shouldn't happen!
-                panic!("Read data unexpectedly longer than requested!");
+                return Err(xous::Error::InternalError);
             }
         }
-        crate::println!("Getting key...");
-        <[u8;16]>::try_from(shifter.key()).expect("Key length mismatch!")
+
+        // Interpret the key as an array.
+        <[u8;16]>::try_from(shifter.key())
+            .map_err(|_| xous::Error::InternalError)
     }
 
 }
