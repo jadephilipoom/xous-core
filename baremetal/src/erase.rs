@@ -280,7 +280,7 @@ impl ShiftXor {
             let ct_upper_idx = ((shift / 8) + i + 1) % ciphertext.len();
             let ct_lower = ciphertext[ct_lower_idx] >> (shift % 8);
             let ct_upper = ciphertext[ct_upper_idx] & ((1 << (shift % 8)) - 1);
-            let ct = ct_lower | (ct_upper << (8 - (shift % 8)));
+            let ct = if shift % 8 == 0 { ct_lower } else { ct_lower | (ct_upper << (8 - (shift % 8))) };
             self.key_block[i] ^= ct;
         }
         Ok(())

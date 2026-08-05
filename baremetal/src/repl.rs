@@ -291,11 +291,7 @@ impl Repl {
                                 .recover_key(seed.as_slice(), key_block.as_slice())
                                 .map_err(|_| Error::help(
                                         "Problem recovering key!"))?;
-                            let mut key_hex = String::new();
-                            for b in key {
-                                key_hex.push_str(format!("{:02x}", b).as_str());
-                            }
-                            crate::println!("key = {:?}", key_hex);
+                            crate::println!("key = {:02x?}", key);
                         }
                         _ => {
                             return Err(Error::help(
