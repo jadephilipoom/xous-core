@@ -21,10 +21,11 @@ trait MemRegion {
     /// Write a slice to the start of the region. Returns a BadAlignment error if the update is not
     /// a multiple of the minimum update size.
     fn write_slice(&self, data: &[u8]) -> Result<(), xous::Error>;
-    /// Returns a slice representing a prefix of the region.
-    fn read_slice(&self, len: usize) -> Result<&[u8], xous::Error>;
     /// Clip off a portion of the start of the region.
     fn advance(&mut self, nbytes: usize) -> Result<(), xous::Error>;
+    /// Returns a slice representing the region. The caller must ensure no one else owns this region
+    /// for the duration of the slice's lifetime.
+    unsafe fn as_slice(&self) -> &[u8];
 }
 
 struct ReramRegion {
@@ -42,7 +43,7 @@ impl ReramRegion {
         let mut start = bao1x_api::BAREMETAL_START + baremetal_image_text_reserved;
         // TODO: uncomment
         // let end = utralib::HW_RERAM_MEM + bao1x_api::RRAM_STORAGE_LEN;
-        let end = start + 128;
+        let end = start + 32;
         // Align the start to the update granularity.
         if start % Self::MIN_UPDATE_BYTES != 0 {
             start += Self::MIN_UPDATE_BYTES - start % Self::MIN_UPDATE_BYTES;
@@ -86,29 +87,21 @@ impl MemRegion for ReramRegion {
         Ok(())
     }
 
-    fn read_slice(&self, len: usize) -> Result<&[u8], xous::Error> {
-        if self.len() < len {
-            return Err(xous::Error::Unavailable)
-        }
-
-        // safety: this is safe if the caller has ensured that the RRAM region is in fact readable.
-        let bytes = unsafe { core::slice::from_raw_parts(
-            self.start as *const u8,
-            len) };
-        Ok(bytes)
-    }
-
     fn advance(&mut self, nbytes: usize) -> Result<(), xous::Error> {
-        if nbytes % 32 != 0 {
-            Err(xous::Error::BadAlignment)
-        } else if self.len() < nbytes {
+        if self.len() < nbytes {
             Err(xous::Error::Unavailable)
         } else {
             self.start += nbytes as u32;
             Ok(())
         }
-    }
+     }
 
+
+    unsafe fn as_slice(&self) -> &[u8] {
+        core::slice::from_raw_parts(
+            self.start as *const u8,
+            self.len())
+    }
 }
 
 /// Traverses through multiple non-contiguous memory blocks.
@@ -201,19 +194,10 @@ impl MemoryTraversal {
         return self.write_slice(tail);
     }
 
-    /// Returns a contiguous slice of data. If possible, the slice has the requested length; it may
-    /// be shorter if that much contiguous data is not available.
-    fn read_slice(&mut self, len: usize) -> Result<&[u8], xous::Error> {
-        if self.blocks[self.idx].len() == 0 {
-            self.advance_block()?;
-            self.read_slice(len)
-        } else {
-            let max_len = self.blocks[self.idx].len();
-            self.blocks[self.idx].read_slice(len.min(max_len))
-        }
+    fn all_blocks(&self) -> &[Box<dyn MemRegion>] {
+        return &self.blocks;
     }
 }
-
 
 pub struct Erasure {
     traversal: MemoryTraversal,
@@ -247,25 +231,14 @@ impl Erasure {
     pub fn recover_key(&self, shift_seed: &[u8], key_block: &[u8]) -> Result<[u8;16], xous::Error> {
         const CHUNK_BYTES: usize = 16;
         let mut shifter = ShiftXor::<CHUNK_BYTES>::new(shift_seed, key_block);
-        let mut reader = MemoryTraversal::new();
-        let nchunks = self.bytes_written.div_ceil(16);
-        for _ in 0..nchunks {
-            let chunk = reader.read_slice(CHUNK_BYTES)?;
-            if chunk.len() == CHUNK_BYTES {
-                shifter.absorb(chunk);
-            } else if chunk.len() < CHUNK_BYTES {
-                let mut v = Vec::new();
-                v.extend_from_slice(chunk);
-                while v.len() < CHUNK_BYTES {
-                    let next_chunk = reader
-                        .read_slice(CHUNK_BYTES - v.len())?;
-                    v.extend_from_slice(next_chunk);
-                }
-                shifter.absorb(v.as_slice());
-            } else {
-                // This shouldn't happen!
-                return Err(xous::Error::InternalError);
-            }
+        let reader = MemoryTraversal::new();
+        for block in reader.all_blocks() {
+            // safety: we need to ensure no one else takes ownership of this memory while we're
+            // reading it. The program is single-threaded and memory is only allocated from SRAM.
+            // TODO: when writing SRAM, make sure we can block off only a small section of it for
+            // runtime allocations.
+            let mem = unsafe { block.as_slice() };
+            shifter.absorb(mem);
         }
 
         // Interpret the key as an array.

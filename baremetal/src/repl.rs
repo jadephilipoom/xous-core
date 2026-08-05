@@ -291,8 +291,6 @@ impl Repl {
                                 .recover_key(seed.as_slice(), key_block.as_slice())
                                 .map_err(|_| Error::help(
                                         "Problem recovering key!"))?;
-                            crate::println!("seed = {:02x?}", seed);
-                            crate::println!("key_block = {:02x?}", key_block);
                             crate::println!("key = {:02x?}", key);
                         }
                         _ => {
