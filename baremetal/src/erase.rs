@@ -1,10 +1,10 @@
 use alloc::boxed::Box;
-// use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use bao1x_hal::rram::Reram;
 use core::convert::TryFrom;
-use digest::Digest;
-use sha2_bao1x::Sha256;
+
+mod shiftxor;
+use crate::erase::shiftxor::ShiftXor;
 
 /// Represents a contiguous block of memory to overwrite or read back.
 trait MemRegion {
@@ -214,83 +214,6 @@ impl MemoryTraversal {
     }
 }
 
-/// Iteratively performs ShiftXOR function as described in the SUANT paper.
-struct ShiftXor {
-    seed: [u8; 16],
-    key_block: [u8; 16],
-    // TODO: change to VecDeque to avoid copies
-    pending: Vec<u8>,
-    counter: u32,
-}
-
-impl ShiftXor {
-    /// The chunk size is determined by the key size, which also must match the key size. We are
-    /// assuming AES-128 here; for AES-256 this and the key/seed sizes would need to be doubled.
-    // TODO: try making this a parameter <N>
-    const CHUNK_BYTES: usize = 16;
-
-    /// Derived size of shift parameter. Unlike in the SUANT paper, we round up to the next byte
-    /// boundary when pulling bytes from the extraction function to avoid shifting bits within
-    /// bytes.
-    const SHIFT_BITS: usize = 7;
-    // TODO: this definition gives an error because bit_width() is not stable
-    // const SHIFT_BITS: usize = (Self::CHUNK_BYTES * 8).bit_width() as usize;
-    const SHIFT_BYTES: usize = (Self::SHIFT_BITS + 7) / 8;
-
-    fn new(seed: &[u8], key_block: &[u8]) -> Self {
-        ShiftXor {
-            seed: <[u8;16]>::try_from(seed).expect("Invalid seed length!"),
-            key_block: <[u8;16]>::try_from(key_block).expect("Invalid key length!"),
-            pending: Vec::with_capacity(32), // size of hash output
-            counter: 0,
-        }
-    }
-
-    fn get_shift(&mut self) -> usize {
-        if self.pending.len() >= Self::SHIFT_BYTES {
-            // Decode shift from the prefix pending bytes (little-endian).
-            let mut shift: u32 = 0;
-            for &b in self.pending.iter().rev() {
-                shift <<= 8;
-                shift |= b as u32;
-            }
-            let tail = self.pending.split_off(Self::SHIFT_BYTES);
-            self.pending = tail;
-            shift as usize
-        } else {
-            // Load more bytes and then try again.
-            let mut h = Sha256::new();
-            h.update(self.seed);
-            h.update(self.counter.to_le_bytes());
-            self.counter += 1;
-            self.pending.extend_from_slice(&h.finalize());
-            self.get_shift()
-        }
-    }
-
-    fn absorb(&mut self, ciphertext: &[u8]) -> Result<(), xous::Error> {
-        if ciphertext.len() != Self::CHUNK_BYTES {
-            return Err(xous::Error::BadAlignment);
-        }
-
-        // XOR the key block with a cyclic shift of the ciphertext.
-        let shift = self.get_shift();
-        for i in 0..ciphertext.len() {
-            let ct_lower_idx = ((shift / 8) + i) % ciphertext.len();
-            let ct_upper_idx = ((shift / 8) + i + 1) % ciphertext.len();
-            let ct_lower = ciphertext[ct_lower_idx] >> (shift % 8);
-            let ct_upper = ciphertext[ct_upper_idx] & ((1 << (shift % 8)) - 1);
-            let ct = if shift % 8 == 0 { ct_lower } else { ct_lower | (ct_upper << (8 - (shift % 8))) };
-            self.key_block[i] ^= ct;
-        }
-        Ok(())
-    }
-
-    fn key(&self) -> &[u8] {
-        &self.key_block
-    }
-}
-
 
 pub struct Erasure {
     traversal: MemoryTraversal,
@@ -322,22 +245,23 @@ impl Erasure {
 
     /// Recover the key from the ciphertext, shift seed, and key block.
     pub fn recover_key(&self, shift_seed: &[u8], key_block: &[u8]) -> Result<[u8;16], xous::Error> {
-        let mut shifter = ShiftXor::new(shift_seed, key_block);
+        const CHUNK_BYTES: usize = 16;
+        let mut shifter = ShiftXor::<CHUNK_BYTES>::new(shift_seed, key_block);
         let mut reader = MemoryTraversal::new();
-        let nchunks = self.bytes_written.div_ceil(ShiftXor::CHUNK_BYTES);
+        let nchunks = self.bytes_written.div_ceil(16);
         for _ in 0..nchunks {
-            let chunk = reader.read_slice(ShiftXor::CHUNK_BYTES)?;
-            if chunk.len() == ShiftXor::CHUNK_BYTES {
-                shifter.absorb(chunk)?;
-            } else if chunk.len() < ShiftXor::CHUNK_BYTES {
+            let chunk = reader.read_slice(CHUNK_BYTES)?;
+            if chunk.len() == CHUNK_BYTES {
+                shifter.absorb(chunk);
+            } else if chunk.len() < CHUNK_BYTES {
                 let mut v = Vec::new();
                 v.extend_from_slice(chunk);
-                while v.len() < ShiftXor::CHUNK_BYTES {
+                while v.len() < CHUNK_BYTES {
                     let next_chunk = reader
-                        .read_slice(ShiftXor::CHUNK_BYTES - v.len())?;
+                        .read_slice(CHUNK_BYTES - v.len())?;
                     v.extend_from_slice(next_chunk);
                 }
-                shifter.absorb(v.as_slice())?;
+                shifter.absorb(v.as_slice());
             } else {
                 // This shouldn't happen!
                 return Err(xous::Error::InternalError);
