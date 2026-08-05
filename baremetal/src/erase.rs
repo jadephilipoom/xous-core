@@ -41,9 +41,7 @@ impl ReramRegion {
         // Get the writeable section of RRAM that is past boot1 and the specified range reserved for
         // the baremetal image.
         let mut start = bao1x_api::BAREMETAL_START + baremetal_image_text_reserved;
-        // TODO: uncomment
-        // let end = utralib::HW_RERAM_MEM + bao1x_api::RRAM_STORAGE_LEN;
-        let end = start + 32;
+        let end = utralib::HW_RERAM_MEM + bao1x_api::RRAM_STORAGE_LEN;
         // Align the start to the update granularity.
         if start % Self::MIN_UPDATE_BYTES != 0 {
             start += Self::MIN_UPDATE_BYTES - start % Self::MIN_UPDATE_BYTES;
@@ -117,7 +115,7 @@ struct MemoryTraversal {
 impl MemoryTraversal {
     fn new() -> Self {
         // TODO: get a tighter bound here.
-        let baremetal_image_reserved = 100000;
+        let baremetal_image_reserved = 102400;
         let blocks: [Box<dyn MemRegion>;1] = [
             Box::new(ReramRegion::new(baremetal_image_reserved)),
         ];
