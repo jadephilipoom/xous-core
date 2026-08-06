@@ -165,6 +165,5 @@ pub unsafe extern "C" fn rust_entry() -> ! {
 
         // Animate the LED flashing to indicate repl loop is running
         delay(1);
-        count += 1;
     }
 }

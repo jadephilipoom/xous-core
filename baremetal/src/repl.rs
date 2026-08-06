@@ -25,11 +25,13 @@ pub struct Repl {
     cmdline: String,
     do_cmd: bool,
     erasure: Erasure,
+    rx_bin: usize,
+    bin_data: Vec<u8>,
 }
 
 const COLUMNS: usize = 4;
 impl Repl {
-    pub fn new() -> Self { Self { cmdline: String::new(), do_cmd: false, erasure: Erasure::new() } }
+    pub fn new() -> Self { Self { cmdline: String::new(), do_cmd: false, erasure: Erasure::new(), rx_bin: 0, bin_data: Vec::new() } }
 
     #[allow(dead_code)]
     pub fn init_cmd(&mut self, cmd: &str) {
@@ -39,6 +41,12 @@ impl Repl {
     }
 
     pub fn rx_char(&mut self, c: u8) {
+        // If we are receiving data in binary mode, copy it to the buffer instead of cmdline.
+        if self.rx_bin > 0 {
+            self.rx_bin -= 1;
+            self.bin_data.push(c);
+            return;
+        }
         if c == b'\r' {
             crate::println!("");
             // carriage return
