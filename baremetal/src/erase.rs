@@ -182,10 +182,6 @@ struct MemoryTraversal {
     blocks: Vec<Box<dyn MemRegion>>,
     // TODO: investigate/add mem regions from utralib/src/generated/bao1x.rs
 }
-/*
-pub const HW_AORAM_MEM:     usize = 0x50300000;
-pub const HW_AORAM_MEM_LEN: usize = 16384;
-*/
 
 macro_rules! mem {
     ( $start: ident, $len: ident ) => {
@@ -203,10 +199,6 @@ impl MemoryTraversal {
         blocks.push(Box::new(mem!(HW_BIO_IMEM1_MEM, HW_BIO_IMEM1_MEM_LEN)));
         blocks.push(Box::new(mem!(HW_BIO_IMEM2_MEM, HW_BIO_IMEM2_MEM_LEN)));
         blocks.push(Box::new(mem!(HW_BIO_IMEM3_MEM, HW_BIO_IMEM3_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_BIO_FIFO0_MEM, HW_BIO_FIFO0_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_BIO_FIFO1_MEM, HW_BIO_FIFO1_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_BIO_FIFO2_MEM, HW_BIO_FIFO2_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_BIO_FIFO3_MEM, HW_BIO_FIFO3_MEM_LEN)));
         let max_min_update = blocks.iter()
             .max_by_key(|b| b.min_update_size())
             .expect("Blocks should be nonempty")
