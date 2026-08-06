@@ -12,10 +12,6 @@ trait MemRegion {
     fn start(&self) -> u32;
     /// End address.
     fn end(&self) -> u32;
-    /// Total size of the region in bytes.
-    fn len(&self) -> usize {
-        (self.end() - self.start()) as usize
-    }
     /// Granularity of writes to the region. The start address should always remain aligned.
     fn min_update_size(&self) -> usize;
     /// Write a slice to the start of the region. Returns a BadAlignment error if the update is not
@@ -23,9 +19,86 @@ trait MemRegion {
     fn write_slice(&self, data: &[u8]) -> Result<(), xous::Error>;
     /// Clip off a portion of the start of the region.
     fn advance(&mut self, nbytes: usize) -> Result<(), xous::Error>;
+
+    /// Total size of the region in bytes.
+    fn len(&self) -> usize {
+        (self.end() - self.start()) as usize
+    }
     /// Returns a slice representing the region. The caller must ensure no one else owns this region
     /// for the duration of the slice's lifetime.
-    unsafe fn as_slice(&self) -> &[u8];
+    unsafe fn as_slice(&self) -> &[u8] {
+        core::slice::from_raw_parts(
+            self.start() as *const u8,
+            self.len())
+    }
+}
+
+struct GenericMemRegion {
+    start: u32,
+    end: u32,
+}
+
+impl GenericMemRegion {
+    // Typical minimum update granularity for memory regions is 4 bytes.
+    const MIN_UPDATE_BYTES: usize = 4;
+ 
+    fn new(start: usize, len: usize) -> Self {
+        // Align the start to the update granularity.
+        if start % Self::MIN_UPDATE_BYTES != 0 || len % Self::MIN_UPDATE_BYTES != 0 {
+            panic!("Memory region ({:x}-{:x}) is not aligned to {:?} bytes", start, start+len, Self::MIN_UPDATE_BYTES);
+        }
+        GenericMemRegion {
+            start: start as u32,
+            end: (start+len) as u32,
+        }
+    }
+}
+
+impl MemRegion for GenericMemRegion {
+    fn start(&self) -> u32 {
+        self.start
+    }
+    
+    fn end(&self) -> u32 {
+        self.end
+    }
+    
+    fn min_update_size(&self) -> usize {
+        Self::MIN_UPDATE_BYTES
+    }
+
+    fn write_slice(&self, data: &[u8]) -> Result<(), xous::Error> {
+        if data.len() % Self::MIN_UPDATE_BYTES != 0 {
+            return Err(xous::Error::BadAlignment);
+        }
+        if data.len() > self.len() {
+            return Err(xous::Error::MemoryInUse);
+        }
+        // Safety: we need to ensure nothing else takes ownership of this memory during the erasure
+        // process.
+        let dst = unsafe {
+            core::slice::from_raw_parts_mut(
+                self.start as *mut u8,
+                data.len())
+        };
+        dst.copy_from_slice(data);
+
+        // Read back to check that the write worked.
+        bao1x_hal::cache_flush();
+        if dst != data {
+            return Err(xous::Error::AccessDenied);
+        }
+        Ok(())
+    }
+
+    fn advance(&mut self, nbytes: usize) -> Result<(), xous::Error> {
+        if self.len() < nbytes {
+            Err(xous::Error::Unavailable)
+        } else {
+            self.start += nbytes as u32;
+            Ok(())
+        }
+     }
 }
 
 struct ReramRegion {
@@ -106,19 +179,34 @@ impl MemRegion for ReramRegion {
 struct MemoryTraversal {
     idx: usize,
     pending: Vec<u8>,
-    blocks: [Box<dyn MemRegion>;1],
+    blocks: Vec<Box<dyn MemRegion>>,
     // TODO: investigate/add mem regions from utralib/src/generated/bao1x.rs
-    // TODO: maybe add a block of constant ciphertext to the program to start so it fills all of the
-    // boot1 region?
+}
+/*
+pub const HW_AORAM_MEM:     usize = 0x50300000;
+pub const HW_AORAM_MEM_LEN: usize = 16384;
+*/
+
+macro_rules! mem {
+    ( $start: ident, $len: ident ) => {
+        GenericMemRegion::new(utralib::generated::$start, utralib::generated::$len)
+    };
 }
 
 impl MemoryTraversal {
     fn new() -> Self {
         // TODO: get a tighter bound here.
         let baremetal_image_reserved = 102400;
-        let blocks: [Box<dyn MemRegion>;1] = [
-            Box::new(ReramRegion::new(baremetal_image_reserved)),
-        ];
+        let mut blocks: Vec<Box<dyn MemRegion>> = Vec::new();
+        blocks.push(Box::new(ReramRegion::new(baremetal_image_reserved)));
+        blocks.push(Box::new(mem!(HW_BIO_IMEM0_MEM, HW_BIO_IMEM0_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_BIO_IMEM1_MEM, HW_BIO_IMEM1_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_BIO_IMEM2_MEM, HW_BIO_IMEM2_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_BIO_IMEM3_MEM, HW_BIO_IMEM3_MEM_LEN)));
+        // blocks.push(Box::new(mem!(HW_BIO_FIFO0_MEM, HW_BIO_FIFO0_MEM_LEN)));
+        // blocks.push(Box::new(mem!(HW_BIO_FIFO1_MEM, HW_BIO_FIFO1_MEM_LEN)));
+        // blocks.push(Box::new(mem!(HW_BIO_FIFO2_MEM, HW_BIO_FIFO2_MEM_LEN)));
+        // blocks.push(Box::new(mem!(HW_BIO_FIFO3_MEM, HW_BIO_FIFO3_MEM_LEN)));
         let max_min_update = blocks.iter()
             .max_by_key(|b| b.min_update_size())
             .expect("Blocks should be nonempty")
