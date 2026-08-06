@@ -43,8 +43,14 @@ impl Repl {
     pub fn rx_char(&mut self, c: u8) {
         // If we are receiving data in binary mode, copy it to the buffer instead of cmdline.
         if self.rx_bin > 0 {
-            self.rx_bin -= 1;
             self.bin_data.push(c);
+            self.rx_bin -= 1;
+            if self.rx_bin == 0 {
+                let addr = self.erasure.peek();
+                self.erasure.write_slice(self.bin_data.as_slice());
+                crate::println!("wrote {:?} bytes starting at {:x} and ending at {:x}", self.bin_data.len(), addr, self.erasure.peek());
+                self.bin_data.clear();
+            }
             return;
         }
         if c == b'\r' {
@@ -116,6 +122,17 @@ impl Repl {
                         "restart" => {
                             self.erasure = Erasure::new();
                         }
+                        "write-bin" => {
+                            if args.len() != 2 {
+                                return Err(Error::help(
+                                    "Help: erase write-bin <count>, count is in decimal",
+                                ));
+                            }
+                            let count = usize::from_str_radix(&args[1], 10)
+                                .map_err(|_| Error::help("Count must be a decimal integer"))?;
+                            self.rx_bin = count;
+                            self.bin_data = Vec::with_capacity(count);
+                        }
                         "write" => {
                             let hex_str = &args[1];
                             let addr = self.erasure.peek();
@@ -164,13 +181,13 @@ impl Repl {
                         }
                         _ => {
                             return Err(Error::help(
-                                "Help: erase {len, restart, write <value>}, value is in hex",
+                                "Help: erase {len, restart, write-bin, write, key}",
                             ));
                         }
                     }
                 } else {
                     return Err(Error::help(
-                        "Help: erase {len, restart, write <value>}, value is in hex",
+                                "Help: erase {len, restart, write-bin, write, key}",
                     ));
                 }
             }
