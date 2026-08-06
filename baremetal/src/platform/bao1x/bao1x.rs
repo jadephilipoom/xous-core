@@ -198,6 +198,7 @@ pub fn lfsr_next_u32(state: u32) -> u32 {
     (state << 1) + bit
 }
 
+#[allow(dead_code)]
 pub fn clockset_wrapper(freq: u32) -> u32 {
     // reset the baud rate on the console UART
     let perclk = unsafe {
@@ -223,7 +224,6 @@ pub fn clockset_wrapper(freq: u32) -> u32 {
         // new.
         udma::Uart::get_handle(utra::udma_uart_2::HW_UDMA_UART_2_BASE, uart_buf_addr, uart_buf_addr)
     };
-    let uart_buf_addr = crate::platform::UART_IFRAM_ADDR;
     let baudrate: u32 = crate::UART_BAUD;
     let freq: u32 = perclk;
     udma_uart.set_baud(baudrate, freq);
