@@ -6,6 +6,8 @@ use core::convert::TryFrom;
 mod shiftxor;
 use crate::erase::shiftxor::ShiftXor;
 
+use crate::SerialInteract;
+
 /// Represents a contiguous block of memory to overwrite or read back.
 trait MemRegion {
     /// Start address.
@@ -247,8 +249,8 @@ impl MemoryTraversal {
         } else if self.blocks[self.idx].len() < min_size {
             // If this happens, we might get mismatches between write and read patterns. However,
             // since we expect the minimum size to be a multiple of the memory size, we don't expect
-            // it to ever happen. If that assumption is violated, panic.
-            panic!("Block size is not a multiple of minimum update size!");
+            // it to ever happen. If that assumption is violated, return an error.
+            return Err(xous::Error::BadAlignment);
         }
 
         // Fill, write, and clear the pending vector if present.
@@ -283,6 +285,9 @@ pub struct Erasure {
 }
 
 impl Erasure {
+    // Determines the chunk size for ShiftXor.
+    const KEY_BYTES: usize = 16;
+
     pub fn new() -> Self {
         Erasure {
             traversal: MemoryTraversal::new(),
@@ -307,8 +312,7 @@ impl Erasure {
 
     /// Recover the key from the ciphertext, shift seed, and key block.
     pub fn recover_key(&self, shift_seed: &[u8], key_block: &[u8]) -> Result<[u8;16], xous::Error> {
-        const CHUNK_BYTES: usize = 16;
-        let mut shifter = ShiftXor::<CHUNK_BYTES>::new(shift_seed, key_block);
+        let mut shifter = ShiftXor::<{ Self::KEY_BYTES }>::new(shift_seed, key_block);
         let reader = MemoryTraversal::new();
         for block in reader.all_blocks() {
             // safety: we need to ensure no one else takes ownership of this memory while we're
@@ -324,4 +328,91 @@ impl Erasure {
             .map_err(|_| xous::Error::InternalError)
     }
 
+}
+
+/// Erasure variant designed to be run without interactivity; the data is sent as raw bytes without
+/// a repl-like interface.
+pub struct OneShotErasure {
+    do_start: bool,
+    started: bool,
+    erasure: Erasure,
+    seed: Vec<u8>,
+    key_block: Vec<u8>,
+    pending_ciphertext: Vec<u8>,
+}
+
+impl OneShotErasure {
+    // Determines how often we actually write the data. Buffering more data causes more stack usage;
+    // buffering less incurs more overhead and internal buffering in the erase procedure.
+    const WRITE_INTERVAL: usize = 32;
+
+    // Sizes of seed and key block.
+    const SEED_BYTES: usize = Erasure::KEY_BYTES;
+    const KEY_BYTES: usize = Erasure::KEY_BYTES;
+
+    pub fn new() -> Self {
+        Self {
+            do_start: false,
+            started: false,
+            erasure: Erasure::new(),
+            seed: Vec::with_capacity(Self::SEED_BYTES),
+            key_block: Vec::with_capacity(Self::KEY_BYTES),
+            pending_ciphertext: Vec::with_capacity(Self::WRITE_INTERVAL),
+        }
+    }
+
+    pub fn start(&mut self) {
+        // Send the byte-length of memory to fill, as a 32-bit little endian integer.
+        let uart = crate::debug::Uart {};
+        let bytelen: u32 = self.erasure.len() as u32;
+        for b in bytelen.to_le_bytes() {
+            uart.putc(b);
+        }
+        self.started = true;
+    }
+}
+
+impl SerialInteract for OneShotErasure {
+    fn rx_char(&mut self, c: u8) {
+        if !self.started {
+            // Expect any single character from the host to signal we can begin processing.
+            self.do_start = true;
+        }
+        if self.erasure.len() > 0 {
+            self.pending_ciphertext.push(c);
+        } else if self.seed.len() < Self::SEED_BYTES {
+            self.seed.push(c);
+        } else if self.key_block.len() < Self::KEY_BYTES {
+            self.key_block.push(c);
+        } else {
+            panic!("Got unexpected input past end of erasure!");
+        }
+    }
+
+    fn process(&mut self) {
+        if self.do_start {
+            self.start();
+            return;
+        }
+        if self.erasure.len() > 0 {
+            if self.pending_ciphertext.len() >= Self::WRITE_INTERVAL
+                || self.pending_ciphertext.len() == self.erasure.len() {
+                self.erasure.write_slice(self.pending_ciphertext.as_slice());
+                self.pending_ciphertext.clear();
+            }
+        } else if self.seed.len() == Self::SEED_BYTES
+            && self.key_block.len() == Self::KEY_BYTES {
+                // Perform key recovery.
+                let key: [u8;16] = self.erasure
+                    .recover_key(self.seed.as_slice(), self.key_block.as_slice())
+                    .unwrap();
+
+                // Send the key to the host (despite the name, the Uart struct can send over USB if
+                // USB is connected.
+                let uart = crate::debug::Uart {};
+                for b in key {
+                    uart.putc(b);
+                }
+        }
+    }
 }

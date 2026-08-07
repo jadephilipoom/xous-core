@@ -3,6 +3,7 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use crate::erase::Erasure;
+use crate::SerialInteract;
 
 #[allow(unused_imports)]
 #[cfg(feature = "bao1x")]
@@ -27,11 +28,25 @@ pub struct Repl {
     erasure: Erasure,
     rx_bin: usize,
     bin_data: Vec<u8>,
+    bin_write_count: usize,
 }
+
+/// Number of bytes to write at a time when accepting data in binary mode.
+const BIN_DATA_WRITE_INTERVAL: usize = 32;
 
 const COLUMNS: usize = 4;
 impl Repl {
-    pub fn new() -> Self { Self { cmdline: String::new(), do_cmd: false, erasure: Erasure::new(), rx_bin: 0, bin_data: Vec::new() } }
+    #[allow(dead_code)]
+    pub fn new() -> Self {
+        Self {
+            cmdline: String::new(),
+            do_cmd: false,
+            erasure: Erasure::new(),
+            rx_bin: 0,
+            bin_data: Vec::new(),
+            bin_write_count: 0
+        }
+    }
 
     #[allow(dead_code)]
     pub fn init_cmd(&mut self, cmd: &str) {
@@ -39,45 +54,8 @@ impl Repl {
         self.cmdline.push('\n');
         self.do_cmd = true;
     }
-
-    pub fn rx_char(&mut self, c: u8) {
-        // If we are receiving data in binary mode, copy it to the buffer instead of cmdline.
-        if self.rx_bin > 0 {
-            self.bin_data.push(c);
-            self.rx_bin -= 1;
-            if self.rx_bin == 0 {
-                let addr = self.erasure.peek();
-                self.erasure.write_slice(self.bin_data.as_slice());
-                crate::println!("wrote {:?} bytes starting at {:x} and ending at {:x}", self.bin_data.len(), addr, self.erasure.peek());
-                self.bin_data.clear();
-            }
-            return;
-        }
-        if c == b'\r' {
-            crate::println!("");
-            // carriage return
-            self.do_cmd = true;
-        } else if c == b'\x08' {
-            // backspace
-            crate::print!("\u{0008}");
-            if self.cmdline.len() != 0 {
-                self.cmdline.pop();
-            }
-        } else {
-            // everything else
-            match char::from_u32(c as u32) {
-                Some(c) => {
-                    crate::print!("{}", c);
-                    self.cmdline.push(c);
-                }
-                None => {
-                    crate::println!("Warning: bad char received, ignoring")
-                }
-            }
-        }
-    }
-
-    pub fn process(&mut self) -> Result<(), Error> {
+    
+    fn try_process(&mut self) -> Result<(), Error> {
         if !self.do_cmd {
             return Err(Error::none());
         }
@@ -131,7 +109,7 @@ impl Repl {
                             let count = usize::from_str_radix(&args[1], 10)
                                 .map_err(|_| Error::help("Count must be a decimal integer"))?;
                             self.rx_bin = count;
-                            self.bin_data = Vec::with_capacity(count);
+                            self.bin_data = Vec::with_capacity(BIN_DATA_WRITE_INTERVAL);
                         }
                         "write" => {
                             let hex_str = &args[1];
@@ -208,8 +186,66 @@ impl Repl {
         Ok(())
     }
 
-    pub fn abort_cmd(&mut self) {
+    fn abort_cmd(&mut self) {
         self.do_cmd = false;
         self.cmdline.clear();
     }
+}
+
+impl SerialInteract for Repl {
+    fn rx_char(&mut self, c: u8) {
+        // If we are receiving data in binary mode, copy it to the buffer instead of cmdline.
+        if self.rx_bin > 0 {
+            self.bin_data.push(c);
+            self.rx_bin -= 1;
+            if self.bin_data.len() >= BIN_DATA_WRITE_INTERVAL {
+                self.erasure.write_slice(&self.bin_data);
+                self.bin_write_count += self.bin_data.len();
+                self.bin_data.clear();
+            }
+            if self.rx_bin == 0 {
+                self.erasure.write_slice(self.bin_data.as_slice());
+                self.bin_write_count += self.bin_data.len();
+                crate::println!("wrote {:?} bytes ending at {:x}", self.bin_write_count, self.erasure.peek());
+                self.bin_data.clear();
+                self.bin_write_count = 0;
+            }
+            return;
+        }
+        if c == b'\r' {
+            crate::println!("");
+            // carriage return
+            self.do_cmd = true;
+        } else if c == b'\x08' {
+            // backspace
+            crate::print!("\u{0008}");
+            if self.cmdline.len() != 0 {
+                self.cmdline.pop();
+            }
+        } else {
+            // everything else
+            match char::from_u32(c as u32) {
+                Some(c) => {
+                    crate::print!("{}", c);
+                    self.cmdline.push(c);
+                }
+                None => {
+                    crate::println!("Warning: bad char received, ignoring")
+                }
+            }
+        }
+    }
+
+    fn process(&mut self) {
+        match self.try_process() {
+            Err(e) => {
+                if let Some(m) = e.message {
+                    crate::println!("{}", m);
+                    self.abort_cmd();
+                }
+            }
+            _ => (),
+        }
+    }
+
 }

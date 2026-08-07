@@ -1,7 +1,7 @@
 use bao1x_api::{IoGpio, IoSetup};
 use bao1x_hal::usb::driver::UsbDeviceState;
 
-use crate::glue;
+use crate::platform::usb::glue;
 
 // Empirically measured PORTSC when the port is unplugged. This might be a brittle way
 // to detect if the device is unplugged.

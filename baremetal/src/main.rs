@@ -7,8 +7,8 @@ mod asm;
 
 mod platform;
 mod repl;
-
 mod erase;
+mod serial;
 
 use alloc::collections::VecDeque;
 use core::cell::RefCell;
@@ -22,10 +22,10 @@ use platform::*;
 #[allow(unused_imports)]
 use utralib::*;
 
-#[allow(unused_imports)]
-use crate::delay;
 #[cfg(feature = "bao1x-usb")]
 use crate::usb::glue;
+
+use crate::serial::SerialInteract;
 
 static UART_RX: Mutex<RefCell<VecDeque<u8>>> = Mutex::new(RefCell::new(VecDeque::new()));
 #[allow(dead_code)]
@@ -59,83 +59,54 @@ pub unsafe extern "C" fn rust_entry() -> ! {
     crate::platform::early_init();
     crate::println!("\n~~Baremetal up!~~\n");
 
-    // provide some feedback on the run state of the BIO by peeking at the program counter
-    // value, and provide feedback on the CPU operation by flashing the RGB LEDs.
-    let mut repl = crate::repl::Repl::new();
+    #[cfg(feature = "repl")]
+    let mut handler = crate::repl::Repl::new();
+
+    #[cfg(not(feature = "repl"))]
+    let mut handler = crate::erase::OneShotErasure::new();
 
     #[cfg(feature = "bao1x-usb")]
     let iox = Iox::new(utra::iox::HW_IOX_BASE as *mut u32);
     #[cfg(feature = "bao1x-usb")]
     let (mut last_usb_state, mut portsc) = crate::platform::usb::glue::hotplug_usb(&iox);
-    #[cfg(feature = "bao1x-usb")]
-    crate::println!(
-        "  [usb connected {:?}] [tx idle {:?}]",
-        USB_CONNECTED.load(Ordering::SeqCst),
-        crate::platform::usb::TX_IDLE.load(Ordering::SeqCst)
-    );
 
     #[cfg(feature = "bao1x-usb")]
-    // do the main loop through either USB interface or serial port
     loop {
         let (new_usb_state, new_portsc) = glue::usb_status();
 
-        // provide feedback when connection is established
+        // check if the USB status has changed
         if new_usb_state != last_usb_state {
-            crate::println_d!("new state {:?}", new_usb_state);
             if new_usb_state == UsbDeviceState::Configured {
-                crate::println!("USB is connected!");
                 last_usb_state = new_usb_state;
                 USB_CONNECTED.store(true, core::sync::atomic::Ordering::SeqCst);
             }
         }
 
-        // repl handling; USB is entirely interrupt driven, so there is no loop to handle it
-        if USB_CONNECTED.load(Ordering::SeqCst) {
-            // fetch characters from the Rx buffer
-            critical_section::with(|cs| {
-                let mut queue = USB_RX.borrow(cs).borrow_mut();
-                while let Some(byte) = queue.pop_front() {
-                    repl.rx_char(byte);
-                }
-            });
+        let use_usb = USB_CONNECTED.load(Ordering::SeqCst);
 
-            // Process any command line requests
-            match repl.process() {
-                Err(e) => {
-                    if let Some(m) = e.message {
-                        crate::println!("{}", m);
-                        repl.abort_cmd();
-                    }
-                }
-                _ => (),
+        // fetch characters from the rx buffer
+        critical_section::with(|cs| {
+            let mut queue = if use_usb {
+                USB_RX.borrow(cs).borrow_mut()
+            } else {
+                UART_RX.borrow(cs).borrow_mut()
             };
+            while let Some(byte) = queue.pop_front() {
+                handler.rx_char(byte);
+            }
+        });
+
+        // process received data
+        handler.process();
+
+        if use_usb {
             glue::flush_tx();
-        } else {
-            // Handle keyboard events.
-            critical_section::with(|cs| {
-                let mut queue = UART_RX.borrow(cs).borrow_mut();
-                while let Some(byte) = queue.pop_front() {
-                    repl.rx_char(byte);
-                }
-            });
-
-            // Process any command line requests
-            match repl.process() {
-                Err(e) => {
-                    if let Some(m) = e.message {
-                        crate::println!("{}", m);
-                        repl.abort_cmd();
-                    }
-                }
-                _ => (),
-            };
         }
 
         // return control to hard-wired serial port when USB is disconnected
         if new_portsc != portsc {
             portsc = new_portsc;
             if glue::is_disconnected(portsc) && new_usb_state == UsbDeviceState::Configured {
-                crate::println_d!("USB disconnected!");
                 USB_CONNECTED.store(false, core::sync::atomic::Ordering::SeqCst);
             }
         }
@@ -144,26 +115,15 @@ pub unsafe extern "C" fn rust_entry() -> ! {
     #[cfg(not(feature = "bao1x-usb"))]
     // do the main loop through only the serial port
     loop {
-        // Handle keyboard events.
+        // fetch characters from the rx buffer
         critical_section::with(|cs| {
             let mut queue = UART_RX.borrow(cs).borrow_mut();
             while let Some(byte) = queue.pop_front() {
-                repl.rx_char(byte);
+                handler.rx_char(byte);
             }
         });
 
-        // Process any command line requests
-        match repl.process() {
-            Err(e) => {
-                if let Some(m) = e.message {
-                    crate::println!("{}", m);
-                    repl.abort_cmd();
-                }
-            }
-            _ => (),
-        };
-
-        // Animate the LED flashing to indicate repl loop is running
-        delay(1);
+        // process received data
+        handler.process();
     }
 }

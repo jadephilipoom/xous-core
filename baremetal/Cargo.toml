@@ -37,6 +37,6 @@ bao1x-evb = []
 bao1x-usb = []
 bao1x-buttons = []
 verbose-debug = []
-
 verilator-only = []
+repl = []
 default = ["bao1x-usb"]
