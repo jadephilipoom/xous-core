@@ -196,7 +196,7 @@ impl MemoryTraversal {
         // TODO: get a tighter bound here.
         let baremetal_image_reserved = 102400;
         let mut blocks: Vec<Box<dyn MemRegion>> = Vec::new();
-        blocks.push(Box::new(ReramRegion::new(baremetal_image_reserved)));
+        // blocks.push(Box::new(ReramRegion::new(baremetal_image_reserved)));
         blocks.push(Box::new(mem!(HW_BIO_IMEM0_MEM, HW_BIO_IMEM0_MEM_LEN)));
         blocks.push(Box::new(mem!(HW_BIO_IMEM1_MEM, HW_BIO_IMEM1_MEM_LEN)));
         blocks.push(Box::new(mem!(HW_BIO_IMEM2_MEM, HW_BIO_IMEM2_MEM_LEN)));
@@ -330,89 +330,153 @@ impl Erasure {
 
 }
 
+/// Convenience helper function for sending numbers over USB/UART.
+fn send_u32(x: u32) {
+    let uart = crate::debug::Uart {};
+    for b in x.to_le_bytes() {
+        uart.putc(b);
+    }
+}
+
+enum State {
+    NotStarted,
+    Erase,
+    GetSeed,
+    GetKeyBlock,
+    RecoverKey,
+    Done,
+}
+
 /// Erasure variant designed to be run without interactivity; the data is sent as raw bytes without
 /// a repl-like interface.
+///
+/// The expected interaction is:
+/// 1. Host sends 4 bytes indicating requested ack frequency in bytes.
+/// 2. Device sends 4 bytes indicating requested total byte length.
+/// 3. Repeat until total byte length is reached:
+///    3a. Host sends <ack frequency> bytes, or remaining bytes if less.
+///    3b. Device sends 4 bytes, encoding the total bytes received so far.
+/// 4. Host sends the key and seed blocks.
+/// 5. Device sends the recovered key.
+///
+/// Each party must wait for the other's messages before proceeding. For example, the host cannot
+/// keep sending bytes without getting an ack in step 3. This prevents situations where due to
+/// different clock frequencies, one party can fill a serial buffer much faster than the other one
+/// can empty it.
+///
 pub struct OneShotErasure {
-    do_start: bool,
-    started: bool,
+    state: State,
     erasure: Erasure,
+    rx: Vec<u8>,
     seed: Vec<u8>,
     key_block: Vec<u8>,
-    pending_ciphertext: Vec<u8>,
+    bytes_written: usize,
+    bytes_to_fill: usize,
+    last_ack: usize,
+    ack_stride: usize,
 }
 
 impl OneShotErasure {
     // Determines how often we actually write the data. Buffering more data causes more stack usage;
     // buffering less incurs more overhead and internal buffering in the erase procedure.
-    const WRITE_INTERVAL: usize = 32;
+    const WRITE_INTERVAL: usize = 128;
 
     // Sizes of seed and key block.
-    const SEED_BYTES: usize = Erasure::KEY_BYTES;
-    const KEY_BYTES: usize = Erasure::KEY_BYTES;
+    const SEED_BYTES: usize = 16;
+    const KEY_BYTES: usize = 16;
 
     pub fn new() -> Self {
         Self {
-            do_start: false,
-            started: false,
+            state: State::NotStarted,
             erasure: Erasure::new(),
             seed: Vec::with_capacity(Self::SEED_BYTES),
             key_block: Vec::with_capacity(Self::KEY_BYTES),
-            pending_ciphertext: Vec::with_capacity(Self::WRITE_INTERVAL),
+            rx: Vec::with_capacity(Self::WRITE_INTERVAL),
+            bytes_written: 0,
+            bytes_to_fill: 0,
+            ack_stride: 0,
+            last_ack: 0,
         }
     }
 
     pub fn start(&mut self) {
         // Send the byte-length of memory to fill, as a 32-bit little endian integer.
-        let uart = crate::debug::Uart {};
-        let bytelen: u32 = self.erasure.len() as u32;
-        for b in bytelen.to_le_bytes() {
-            uart.putc(b);
-        }
-        self.started = true;
+        self.bytes_to_fill = self.erasure.len();
+        send_u32(self.bytes_to_fill as u32);
+        self.state = State::Erase;
     }
 }
 
 impl SerialInteract for OneShotErasure {
     fn rx_char(&mut self, c: u8) {
-        if !self.started {
-            // Expect any single character from the host to signal we can begin processing.
-            self.do_start = true;
-        }
-        if self.erasure.len() > 0 {
-            self.pending_ciphertext.push(c);
-        } else if self.seed.len() < Self::SEED_BYTES {
-            self.seed.push(c);
-        } else if self.key_block.len() < Self::KEY_BYTES {
-            self.key_block.push(c);
-        } else {
-            panic!("Got unexpected input past end of erasure!");
+        match self.state {
+            State::GetSeed => {
+                self.seed.push(c);
+            },
+            State::GetKeyBlock => {
+                self.key_block.push(c);
+            },
+            _ => {
+            self.rx.push(c);
+            }
         }
     }
 
     fn process(&mut self) {
-        if self.do_start {
-            self.start();
-            return;
-        }
-        if self.erasure.len() > 0 {
-            if self.pending_ciphertext.len() >= Self::WRITE_INTERVAL
-                || self.pending_ciphertext.len() == self.erasure.len() {
-                self.erasure.write_slice(self.pending_ciphertext.as_slice());
-                self.pending_ciphertext.clear();
-            }
-        } else if self.seed.len() == Self::SEED_BYTES
-            && self.key_block.len() == Self::KEY_BYTES {
+        match self.state {
+            State::NotStarted => {
+                // 4 bytes from the host indicating requested ack stride signal us to start
+                if self.rx.len() >= 4 {
+                    let stride = u32::from_le_bytes(*self.rx.first_chunk::<4>().unwrap());
+                    self.ack_stride = stride as usize;
+                    self.rx.clear();
+                    self.start();
+                }
+            },
+            State::Erase => {
+                if self.rx.len() >= Self::WRITE_INTERVAL
+                    || self.rx.len() >= self.last_ack + self.ack_stride
+                    || self.rx.len() >= self.bytes_to_fill {
+                    self.erasure.write_slice(self.rx.as_slice());
+                    self.bytes_written += self.rx.len();
+                    self.bytes_to_fill -= self.rx.len();
+                    self.rx.clear();
+                    if self.bytes_written >= self.last_ack + self.ack_stride {
+                        send_u32(self.bytes_written as u32);
+                        self.last_ack += self.ack_stride;
+                    }
+                    if self.bytes_to_fill == 0 {
+                        self.state = State::GetSeed;
+                        self.last_ack = 0;
+                        send_u32(Self::SEED_BYTES as u32);
+                    }
+                }
+            },
+            State::GetSeed => {
+                if self.seed.len() == Self::SEED_BYTES {
+                    self.state = State::GetKeyBlock;
+                    send_u32(Self::KEY_BYTES as u32);
+                }
+            },
+            State::GetKeyBlock => {
+                if self.key_block.len() == Self::KEY_BYTES {
+                    self.state = State::RecoverKey;
+                }
+            },
+            State::RecoverKey => {
                 // Perform key recovery.
                 let key: [u8;16] = self.erasure
                     .recover_key(self.seed.as_slice(), self.key_block.as_slice())
                     .unwrap();
 
-                // Send the key to the host (despite the name, the Uart struct can send over USB if
-                // USB is connected.
+                // send the key to the host; despite the name, Uart::putc sends over USB if possible
                 let uart = crate::debug::Uart {};
                 for b in key {
                     uart.putc(b);
                 }
+                self.state = State::Done;
+            },
+            State::Done => (),
         }
     }
 }
