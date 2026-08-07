@@ -57,6 +57,7 @@ pub fn uart_irq_handler() {
 #[export_name = "rust_entry"]
 pub unsafe extern "C" fn rust_entry() -> ! {
     crate::platform::early_init();
+    #[cfg(feature = "repl")]
     crate::println!("\n~~Baremetal up!~~\n");
 
     #[cfg(feature = "repl")]
