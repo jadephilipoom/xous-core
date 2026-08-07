@@ -196,7 +196,7 @@ impl MemoryTraversal {
         // TODO: get a tighter bound here.
         let baremetal_image_reserved = 102400;
         let mut blocks: Vec<Box<dyn MemRegion>> = Vec::new();
-        // blocks.push(Box::new(ReramRegion::new(baremetal_image_reserved)));
+        blocks.push(Box::new(ReramRegion::new(baremetal_image_reserved)));
         blocks.push(Box::new(mem!(HW_BIO_IMEM0_MEM, HW_BIO_IMEM0_MEM_LEN)));
         blocks.push(Box::new(mem!(HW_BIO_IMEM1_MEM, HW_BIO_IMEM1_MEM_LEN)));
         blocks.push(Box::new(mem!(HW_BIO_IMEM2_MEM, HW_BIO_IMEM2_MEM_LEN)));
@@ -379,7 +379,7 @@ pub struct OneShotErasure {
 impl OneShotErasure {
     // Determines how often we actually write the data. Buffering more data causes more stack usage;
     // buffering less incurs more overhead and internal buffering in the erase procedure.
-    const WRITE_INTERVAL: usize = 128;
+    const WRITE_INTERVAL: usize = 256;
 
     // Sizes of seed and key block.
     const SEED_BYTES: usize = 16;
@@ -447,15 +447,12 @@ impl SerialInteract for OneShotErasure {
                     }
                     if self.bytes_to_fill == 0 {
                         self.state = State::GetSeed;
-                        self.last_ack = 0;
-                        send_u32(Self::SEED_BYTES as u32);
                     }
                 }
             },
             State::GetSeed => {
                 if self.seed.len() == Self::SEED_BYTES {
                     self.state = State::GetKeyBlock;
-                    send_u32(Self::KEY_BYTES as u32);
                 }
             },
             State::GetKeyBlock => {
