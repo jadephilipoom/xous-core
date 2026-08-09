@@ -356,12 +356,6 @@ impl Erasure {
             shifter.absorb(mem);
         }
 
-        // TODO: remove
-        send_u32(shifter.counter);
-        send_u32(self.bytes_written as u32);
-        send_u32(reader.blocks[0].len() as u32);
-        send_u32(reader.blocks[0].start());
-
         // Interpret the key as an array.
         <[u8;16]>::try_from(shifter.key())
             .map_err(|_| xous::Error::InternalError)
@@ -472,21 +466,6 @@ impl SerialInteract for OneShotErasure {
                             send_u32(0); // "no error" code
                             send_u32(self.bytes_to_fill as u32);
 
-                            // TODO: remove, debugging
-                            let write_start = self.erasure.traversal.blocks[0].start();
-                            send_u32(write_start);
-                            send_u32(self.erasure.traversal.blocks[0].end());
-                            send_u32(self.erasure.traversal.blocks[0].len() as u32);
-                            let reader = MemoryTraversal::new(0).unwrap();
-                            let mem = unsafe { &reader.blocks[0].as_slice() };
-                            let read_start = reader.blocks[0].start();
-                            for i in 0..8 {
-                                let offset: usize = (write_start - read_start) as usize - (4 * (i+1));
-                                let mut word = [0u8;4];
-                                word.copy_from_slice(&mem[offset..offset+4]);
-                                send_u32(read_start+offset as u32);
-                                send_u32(u32::from_le_bytes(word));
-                            }
                         }
                         Err(e) => {
                             send_u32(e.to_usize() as u32);
