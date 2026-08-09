@@ -15,8 +15,6 @@ trait MemRegion {
     fn start(&self) -> u32;
     /// End address.
     fn end(&self) -> u32;
-    /// Granularity of writes to the region. The start address should always remain aligned.
-    fn min_update_size(&self) -> usize;
     /// Write a slice to the start of the region. Returns a BadAlignment error if the update is not
     /// a multiple of the minimum update size.
     fn write_slice(&self, data: &[u8]) -> Result<(), xous::Error>;
@@ -42,14 +40,7 @@ struct GenericMemRegion {
 }
 
 impl GenericMemRegion {
-    // Typical minimum update granularity for memory regions is 4 bytes.
-    const MIN_UPDATE_BYTES: usize = 4;
- 
     fn new(start: usize, len: usize) -> Self {
-        // Align the start to the update granularity.
-        if start % Self::MIN_UPDATE_BYTES != 0 || len % Self::MIN_UPDATE_BYTES != 0 {
-            panic!("Memory region ({:x}-{:x}) is not aligned to {:?} bytes", start, start+len, Self::MIN_UPDATE_BYTES);
-        }
         GenericMemRegion {
             start: start as u32,
             end: (start+len) as u32,
@@ -65,15 +56,8 @@ impl MemRegion for GenericMemRegion {
     fn end(&self) -> u32 {
         self.end
     }
-    
-    fn min_update_size(&self) -> usize {
-        Self::MIN_UPDATE_BYTES
-    }
 
     fn write_slice(&self, data: &[u8]) -> Result<(), xous::Error> {
-        if data.len() % Self::MIN_UPDATE_BYTES != 0 {
-            return Err(xous::Error::BadAlignment);
-        }
         if data.len() > self.len() {
             return Err(xous::Error::MemoryInUse);
         }
@@ -110,20 +94,16 @@ struct ReramRegion {
 }
 
 impl ReramRegion {
-    // RRAM minimum update granularity is 32 bytes.
-    const MIN_UPDATE_BYTES: usize = 32;
- 
     fn new(baremetal_rram_offset: u32) -> Result<Self,xous::Error> {
         // Get the writeable section of RRAM that is past boot1 and the specified range reserved for
         // the baremetal image. The baremetal code actually starts at an offset of
         // 1024 from BAREMETAL_START.
         let mut start = bao1x_api::BAREMETAL_START + 1024 + baremetal_rram_offset as usize;
         let end = utralib::HW_RERAM_MEM + bao1x_api::RRAM_STORAGE_LEN;
-        if start % Self::MIN_UPDATE_BYTES != 0 {
-            // If the start address is not a multiple of the minimum update granularity, we need to
-            // write some zeroes as padding.
+        if start % Erasure::KEY_BYTES != 0 {
+            // If the start address is not a multiple of the key size, write some zeroes as padding.
             let offset = start as usize - utralib::HW_RERAM_MEM;
-            let nbytes = Self::MIN_UPDATE_BYTES - offset % Self::MIN_UPDATE_BYTES;
+            let nbytes = Erasure::KEY_BYTES - offset % Erasure::KEY_BYTES;
             start += nbytes;
             let data = vec![0u8;nbytes];
             let mut rram = Reram::new();
@@ -150,17 +130,8 @@ impl MemRegion for ReramRegion {
     fn end(&self) -> u32 {
         self.end
     }
-    
-    fn min_update_size(&self) -> usize {
-        Self::MIN_UPDATE_BYTES
-    }
 
     fn write_slice(&self, data: &[u8]) -> Result<(), xous::Error> {
-        // TODO: this might not be necessary if we use write_slice, for write_u32_aligned it's more
-        // complicated
-        if data.len() % Self::MIN_UPDATE_BYTES != 0 {
-            return Err(xous::Error::BadAlignment);
-        }
         if data.len() > self.len() {
             return Err(xous::Error::MemoryInUse);
         }
@@ -193,7 +164,6 @@ impl MemRegion for ReramRegion {
 /// Traverses through multiple non-contiguous memory blocks.
 struct MemoryTraversal {
     idx: usize,
-    pending: Vec<u8>,
     blocks: Vec<Box<dyn MemRegion>>,
     // TODO: investigate/add mem regions from utralib/src/generated/bao1x.rs
 }
@@ -216,13 +186,8 @@ impl MemoryTraversal {
         // seems to block.
         // blocks.push(Box::new(mem!(HW_IFRAM0_MEM, HW_IFRAM0_MEM_LEN)));
         // blocks.push(Box::new(mem!(HW_IFRAM1_MEM, HW_IFRAM1_MEM_LEN)));
-        let max_min_update = blocks.iter()
-            .max_by_key(|b| b.min_update_size())
-            .expect("Blocks should be nonempty")
-            .min_update_size();
         Ok(MemoryTraversal {
             idx: 0,
-            pending: Vec::with_capacity(max_min_update),
             blocks: blocks,
         })
     }
@@ -231,7 +196,6 @@ impl MemoryTraversal {
     pub fn empty() -> Self {
         MemoryTraversal {
             idx: 0,
-            pending: Vec::new(),
             blocks: Vec::new(),
         }
     }
@@ -258,44 +222,16 @@ impl MemoryTraversal {
     }
 
     fn write_slice(&mut self, data: &[u8]) -> Result<(), xous::Error> {
-        let min_size = self.blocks[self.idx].min_update_size();
-
-        // If we don't have enough data for a write, update pending and exit.
-        if self.pending.len() + data.len() < min_size {
-            self.pending.extend_from_slice(data);
-            return Ok(());
-        }
-
-        // If there's not enough space in the block, skip to the next one and retry.
-        if self.blocks[self.idx].len() == 0 {
+        if data.len() <= self.blocks[self.idx].len() {
+            self.blocks[self.idx].write_slice(data)?;
+            self.blocks[self.idx].advance(data.len())
+        } else {
+            let (head, tail) = data.split_at(self.blocks[self.idx].len());
+            self.blocks[self.idx].write_slice(head)?;
+            self.blocks[self.idx].advance(head.len())?;
             self.advance_block()?;
-            return self.write_slice(data);
-        } else if self.blocks[self.idx].len() < min_size {
-            // If this happens, we might get mismatches between write and read patterns. However,
-            // since we expect the minimum size to be a multiple of the memory size, we don't expect
-            // it to ever happen. If that assumption is violated, return an error.
-            return Err(xous::Error::BadAlignment);
+            self.write_slice(tail)
         }
-
-        // Fill, write, and clear the pending vector if present.
-        let mut rem_data = data;
-        if self.pending.len() != 0 {
-            let (head, tail) = data.split_at(min_size - self.pending.len());
-            self.pending.extend_from_slice(head);
-            self.blocks[self.idx].write_slice(self.pending.as_slice())?;
-            self.blocks[self.idx].advance(self.pending.len())?;
-            self.pending.clear();
-            rem_data = tail;
-        }
-
-        // Find the greatest multiple of the min update size that fits in both data and the
-        // remainder of the current block.
-        let cutoff = self.blocks[self.idx].len().min(rem_data.len());
-        let cutoff_aligned = cutoff - (cutoff % min_size);
-        let (head, tail) = rem_data.split_at(cutoff_aligned);
-        self.blocks[self.idx].write_slice(head)?;
-        self.blocks[self.idx].advance(head.len())?;
-        return self.write_slice(tail);
     }
 
     fn all_blocks(&self) -> &[Box<dyn MemRegion>] {
