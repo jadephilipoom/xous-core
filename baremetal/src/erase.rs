@@ -115,14 +115,15 @@ impl ReramRegion {
  
     fn new(baremetal_rram_offset: u32) -> Result<Self,xous::Error> {
         // Get the writeable section of RRAM that is past boot1 and the specified range reserved for
-        // the baremetal image.
-        let mut start = bao1x_api::BAREMETAL_START + baremetal_rram_offset as usize;
+        // the baremetal image. The baremetal code actually starts at an offset of
+        // 1024 from BAREMETAL_START.
+        let mut start = bao1x_api::BAREMETAL_START + 1024 + baremetal_rram_offset as usize;
         let end = utralib::HW_RERAM_MEM + bao1x_api::RRAM_STORAGE_LEN;
         if start % Self::MIN_UPDATE_BYTES != 0 {
             // If the start address is not a multiple of the minimum update granularity, we need to
             // write some zeroes as padding.
             let offset = start as usize - utralib::HW_RERAM_MEM;
-            let nbytes = Self::MIN_UPDATE_BYTES - offset as usize % Self::MIN_UPDATE_BYTES;
+            let nbytes = Self::MIN_UPDATE_BYTES - offset % Self::MIN_UPDATE_BYTES;
             start += nbytes;
             let data = vec![0u8;nbytes];
             let mut rram = Reram::new();
@@ -344,9 +345,8 @@ impl Erasure {
     /// Recover the key from the ciphertext, shift seed, and key block.
     pub fn recover_key(&self, shift_seed: &[u8], key_block: &[u8]) -> Result<[u8;16], xous::Error> {
         let mut shifter = ShiftXor::<{ Self::KEY_BYTES }>::new(shift_seed, key_block);
-        // Start a traversal that *includes* the baremetal rram code (which starts at an offset of
-        // 1024, empirically determined).
-        let reader = MemoryTraversal::new(1024)?;
+        // Start a traversal that *includes* the baremetal rram code.
+        let reader = MemoryTraversal::new(0)?;
         for block in reader.all_blocks() {
             // safety: we need to ensure no one else takes ownership of this memory while we're
             // reading it. The program is single-threaded and memory is only allocated from SRAM.
@@ -355,6 +355,12 @@ impl Erasure {
             let mem = unsafe { block.as_slice() };
             shifter.absorb(mem);
         }
+
+        // TODO: remove
+        send_u32(shifter.counter);
+        send_u32(self.bytes_written as u32);
+        send_u32(reader.blocks[0].len() as u32);
+        send_u32(reader.blocks[0].start());
 
         // Interpret the key as an array.
         <[u8;16]>::try_from(shifter.key())
@@ -465,6 +471,22 @@ impl SerialInteract for OneShotErasure {
                             self.erasure = erasure;
                             send_u32(0); // "no error" code
                             send_u32(self.bytes_to_fill as u32);
+
+                            // TODO: remove, debugging
+                            let write_start = self.erasure.traversal.blocks[0].start();
+                            send_u32(write_start);
+                            send_u32(self.erasure.traversal.blocks[0].end());
+                            send_u32(self.erasure.traversal.blocks[0].len() as u32);
+                            let reader = MemoryTraversal::new(0).unwrap();
+                            let mem = unsafe { &reader.blocks[0].as_slice() };
+                            let read_start = reader.blocks[0].start();
+                            for i in 0..8 {
+                                let offset: usize = (write_start - read_start) as usize - (4 * (i+1));
+                                let mut word = [0u8;4];
+                                word.copy_from_slice(&mem[offset..offset+4]);
+                                send_u32(read_start+offset as u32);
+                                send_u32(u32::from_le_bytes(word));
+                            }
                         }
                         Err(e) => {
                             send_u32(e.to_usize() as u32);
