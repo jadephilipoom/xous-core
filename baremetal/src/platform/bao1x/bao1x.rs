@@ -171,6 +171,7 @@ pub fn delay_at_sysfreq(ms: usize, sysclk_freq: u32) {
 }
 
 /// Delay function that delays a given number of milliseconds.
+#[allow(dead_code)]
 pub fn delay(ms: usize) {
     let mut timer = utralib::CSR::new(utra::timer0::HW_TIMER0_BASE as *mut u32);
     timer.wfo(utra::timer0::EV_PENDING_ZERO, 1);

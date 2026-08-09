@@ -34,6 +34,9 @@ pub struct Repl {
 /// Number of bytes to write at a time when accepting data in binary mode.
 const BIN_DATA_WRITE_INTERVAL: usize = 32;
 
+/// Default offset from BAREMETAL_START to start erasing RRAM from.
+const DEFAULT_BAREMETAL_RRAM_OFFSET: u32 = 102400;
+
 const COLUMNS: usize = 4;
 impl Repl {
     #[allow(dead_code)]
@@ -41,7 +44,7 @@ impl Repl {
         Self {
             cmdline: String::new(),
             do_cmd: false,
-            erasure: Erasure::new(),
+            erasure: Erasure::new(DEFAULT_BAREMETAL_RRAM_OFFSET),
             rx_bin: 0,
             bin_data: Vec::new(),
             bin_write_count: 0
@@ -98,7 +101,17 @@ impl Repl {
                             crate::println!("{:?} bytes remaining", self.erasure.len());
                         }
                         "restart" => {
-                            self.erasure = Erasure::new();
+                            if args.len() == 1 {
+                                self.erasure = Erasure::new(DEFAULT_BAREMETAL_RRAM_OFFSET);
+                            } else if args.len() == 2 {
+                                let offset = u32::from_str_radix(&args[1], 16)
+                                    .map_err(|_| Error::help("Offset must be in hex and fit in u32"))?;
+                                self.erasure = Erasure::new(offset);
+                            } else {
+                                return Err(Error::help(
+                                    "Help: erase restart [<rram_offset>], offset optional and in hex",
+                                ));
+                            }
                         }
                         "write-bin" => {
                             if args.len() != 2 {

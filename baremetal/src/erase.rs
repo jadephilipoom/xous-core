@@ -112,10 +112,10 @@ impl ReramRegion {
     // RRAM minimum update granularity is 32 bytes.
     const MIN_UPDATE_BYTES: usize = 32;
  
-    fn new(baremetal_image_text_reserved: usize) -> Self {
+    fn new(baremetal_image_text_reserved: u32) -> Self {
         // Get the writeable section of RRAM that is past boot1 and the specified range reserved for
         // the baremetal image.
-        let mut start = bao1x_api::BAREMETAL_START + baremetal_image_text_reserved;
+        let mut start = bao1x_api::BAREMETAL_START + baremetal_image_text_reserved as usize;
         let end = utralib::HW_RERAM_MEM + bao1x_api::RRAM_STORAGE_LEN;
         // Align the start to the update granularity.
         if start % Self::MIN_UPDATE_BYTES != 0 {
@@ -192,15 +192,17 @@ macro_rules! mem {
 }
 
 impl MemoryTraversal {
-    fn new() -> Self {
-        // TODO: get a tighter bound here.
-        let baremetal_image_reserved = 102400;
+    fn new(baremetal_rram_offset: u32) -> Self {
         let mut blocks: Vec<Box<dyn MemRegion>> = Vec::new();
-        blocks.push(Box::new(ReramRegion::new(baremetal_image_reserved)));
+        blocks.push(Box::new(ReramRegion::new(baremetal_rram_offset)));
         blocks.push(Box::new(mem!(HW_BIO_IMEM0_MEM, HW_BIO_IMEM0_MEM_LEN)));
         blocks.push(Box::new(mem!(HW_BIO_IMEM1_MEM, HW_BIO_IMEM1_MEM_LEN)));
         blocks.push(Box::new(mem!(HW_BIO_IMEM2_MEM, HW_BIO_IMEM2_MEM_LEN)));
         blocks.push(Box::new(mem!(HW_BIO_IMEM3_MEM, HW_BIO_IMEM3_MEM_LEN)));
+        // TODO: IFRAM0 works but might overwrite some USB stuff, needs further checking. IFRAM1
+        // seems to block.
+        // blocks.push(Box::new(mem!(HW_IFRAM0_MEM, HW_IFRAM0_MEM_LEN)));
+        // blocks.push(Box::new(mem!(HW_IFRAM1_MEM, HW_IFRAM1_MEM_LEN)));
         let max_min_update = blocks.iter()
             .max_by_key(|b| b.min_update_size())
             .expect("Blocks should be nonempty")
@@ -288,9 +290,11 @@ impl Erasure {
     // Determines the chunk size for ShiftXor.
     const KEY_BYTES: usize = 16;
 
-    pub fn new() -> Self {
+    pub fn new(baremetal_rram_offset: u32) -> Self {
+        // Set an offset so we don't overwrite the code we're running.
+        // TODO: get a tighter bound here once code stabilizes.
         Erasure {
-            traversal: MemoryTraversal::new(),
+            traversal: MemoryTraversal::new(baremetal_rram_offset),
             bytes_written: 0,
         }
     }
@@ -313,7 +317,9 @@ impl Erasure {
     /// Recover the key from the ciphertext, shift seed, and key block.
     pub fn recover_key(&self, shift_seed: &[u8], key_block: &[u8]) -> Result<[u8;16], xous::Error> {
         let mut shifter = ShiftXor::<{ Self::KEY_BYTES }>::new(shift_seed, key_block);
-        let reader = MemoryTraversal::new();
+        // Start a traversal that *includes* the baremetal rram code (which starts at an offset of
+        // 1024, empirically determined).
+        let reader = MemoryTraversal::new(1024);
         for block in reader.all_blocks() {
             // safety: we need to ensure no one else takes ownership of this memory while we're
             // reading it. The program is single-threaded and memory is only allocated from SRAM.
@@ -351,7 +357,9 @@ enum State {
 /// a repl-like interface.
 ///
 /// The expected interaction is:
-/// 1. Host sends 4 bytes indicating requested ack frequency in bytes.
+/// 1. Host sends:
+///    1a. 4 bytes indicating requested ack frequency in bytes.
+///    1b. 4 bytes indicating the rram offset to start erasure from.
 /// 2. Device sends 4 bytes indicating requested total byte length.
 /// 3. Repeat until total byte length is reached:
 ///    3a. Host sends <ack frequency> bytes, or remaining bytes if less.
@@ -388,7 +396,7 @@ impl OneShotErasure {
     pub fn new() -> Self {
         Self {
             state: State::NotStarted,
-            erasure: Erasure::new(),
+            erasure: Erasure::new(0), // will be replaced
             seed: Vec::with_capacity(Self::SEED_BYTES),
             key_block: Vec::with_capacity(Self::KEY_BYTES),
             rx: Vec::with_capacity(Self::WRITE_INTERVAL),
@@ -425,9 +433,11 @@ impl SerialInteract for OneShotErasure {
     fn process(&mut self) {
         match self.state {
             State::NotStarted => {
-                // 4 bytes from the host indicating requested ack stride signal us to start
-                if self.rx.len() >= 4 {
-                    let stride = u32::from_le_bytes(*self.rx.first_chunk::<4>().unwrap());
+                if self.rx.len() >= 8 {
+                    let (chunks, _) = self.rx.as_chunks::<4>();
+                    let stride = u32::from_le_bytes(chunks[0]);
+                    let rram_offset = u32::from_le_bytes(chunks[1]);
+                    self.erasure = Erasure::new(rram_offset);
                     self.ack_stride = stride as usize;
                     self.rx.clear();
                     self.start();
@@ -437,9 +447,10 @@ impl SerialInteract for OneShotErasure {
                 if self.rx.len() >= Self::WRITE_INTERVAL
                     || self.rx.len() >= self.last_ack + self.ack_stride
                     || self.rx.len() >= self.bytes_to_fill {
-                    self.erasure.write_slice(self.rx.as_slice());
-                    self.bytes_written += self.rx.len();
-                    self.bytes_to_fill -= self.rx.len();
+                    let src = &self.rx[..self.rx.len().min(self.bytes_to_fill)];
+                    self.erasure.write_slice(src);
+                    self.bytes_written += src.len();
+                    self.bytes_to_fill -= src.len();
                     self.rx.clear();
                     if self.bytes_written >= self.last_ack + self.ack_stride {
                         send_u32(self.bytes_written as u32);
