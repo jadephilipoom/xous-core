@@ -44,7 +44,7 @@ impl Repl {
         Self {
             cmdline: String::new(),
             do_cmd: false,
-            erasure: Erasure::new(DEFAULT_BAREMETAL_RRAM_OFFSET),
+            erasure: Erasure::new(DEFAULT_BAREMETAL_RRAM_OFFSET).unwrap(),
             rx_bin: 0,
             bin_data: Vec::new(),
             bin_write_count: 0
@@ -102,11 +102,13 @@ impl Repl {
                         }
                         "restart" => {
                             if args.len() == 1 {
-                                self.erasure = Erasure::new(DEFAULT_BAREMETAL_RRAM_OFFSET);
+                                self.erasure = Erasure::new(DEFAULT_BAREMETAL_RRAM_OFFSET)
+                                    .map_err(|_| Error::help("Problem initializing erasure"))?;
                             } else if args.len() == 2 {
                                 let offset = u32::from_str_radix(&args[1], 16)
                                     .map_err(|_| Error::help("Offset must be in hex and fit in u32"))?;
-                                self.erasure = Erasure::new(offset);
+                                self.erasure = Erasure::new(offset)
+                                    .map_err(|_| Error::help("Problem initializing erasure"))?;
                             } else {
                                 return Err(Error::help(
                                     "Help: erase restart [<rram_offset>], offset optional and in hex",

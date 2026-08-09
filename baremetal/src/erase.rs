@@ -1,4 +1,5 @@
 use alloc::boxed::Box;
+use alloc::vec;
 use alloc::vec::Vec;
 use bao1x_hal::rram::Reram;
 use core::convert::TryFrom;
@@ -112,22 +113,31 @@ impl ReramRegion {
     // RRAM minimum update granularity is 32 bytes.
     const MIN_UPDATE_BYTES: usize = 32;
  
-    fn new(baremetal_image_text_reserved: u32) -> Self {
+    fn new(baremetal_rram_offset: u32) -> Result<Self,xous::Error> {
         // Get the writeable section of RRAM that is past boot1 and the specified range reserved for
         // the baremetal image.
-        let mut start = bao1x_api::BAREMETAL_START + baremetal_image_text_reserved as usize;
+        let mut start = bao1x_api::BAREMETAL_START + baremetal_rram_offset as usize;
         let end = utralib::HW_RERAM_MEM + bao1x_api::RRAM_STORAGE_LEN;
-        // Align the start to the update granularity.
         if start % Self::MIN_UPDATE_BYTES != 0 {
-            start += Self::MIN_UPDATE_BYTES - start % Self::MIN_UPDATE_BYTES;
+            // If the start address is not a multiple of the minimum update granularity, we need to
+            // write some zeroes as padding.
+            let offset = start as usize - utralib::HW_RERAM_MEM;
+            let nbytes = Self::MIN_UPDATE_BYTES - offset as usize % Self::MIN_UPDATE_BYTES;
+            start += nbytes;
+            let data = vec![0u8;nbytes];
+            let mut rram = Reram::new();
+            let len = rram.write_slice(offset, data.as_slice())?;
+            if len != data.len() {
+                return Err(xous::Error::InternalError);
+            }
         }
         if end < start {
-            panic!("Calculated a negative-size RRAM! ({:x}-{:x})", start, end);
+            return Err(xous::Error::ParseError);
         }
-        ReramRegion {
+        Ok(ReramRegion {
             start: start as u32,
             end: end as u32,
-        }
+        })
     }
 }
 
@@ -145,6 +155,8 @@ impl MemRegion for ReramRegion {
     }
 
     fn write_slice(&self, data: &[u8]) -> Result<(), xous::Error> {
+        // TODO: this might not be necessary if we use write_slice, for write_u32_aligned it's more
+        // complicated
         if data.len() % Self::MIN_UPDATE_BYTES != 0 {
             return Err(xous::Error::BadAlignment);
         }
@@ -192,9 +204,9 @@ macro_rules! mem {
 }
 
 impl MemoryTraversal {
-    fn new(baremetal_rram_offset: u32) -> Self {
+    fn new(baremetal_rram_offset: u32) -> Result<Self,xous::Error> {
         let mut blocks: Vec<Box<dyn MemRegion>> = Vec::new();
-        blocks.push(Box::new(ReramRegion::new(baremetal_rram_offset)));
+        blocks.push(Box::new(ReramRegion::new(baremetal_rram_offset)?));
         blocks.push(Box::new(mem!(HW_BIO_IMEM0_MEM, HW_BIO_IMEM0_MEM_LEN)));
         blocks.push(Box::new(mem!(HW_BIO_IMEM1_MEM, HW_BIO_IMEM1_MEM_LEN)));
         blocks.push(Box::new(mem!(HW_BIO_IMEM2_MEM, HW_BIO_IMEM2_MEM_LEN)));
@@ -207,10 +219,19 @@ impl MemoryTraversal {
             .max_by_key(|b| b.min_update_size())
             .expect("Blocks should be nonempty")
             .min_update_size();
-        MemoryTraversal {
+        Ok(MemoryTraversal {
             idx: 0,
             pending: Vec::with_capacity(max_min_update),
             blocks: blocks,
+        })
+    }
+
+    /// Creates an empty erasure representing no memory.
+    pub fn empty() -> Self {
+        MemoryTraversal {
+            idx: 0,
+            pending: Vec::new(),
+            blocks: Vec::new(),
         }
     }
 
@@ -290,11 +311,17 @@ impl Erasure {
     // Determines the chunk size for ShiftXor.
     const KEY_BYTES: usize = 16;
 
-    pub fn new(baremetal_rram_offset: u32) -> Self {
-        // Set an offset so we don't overwrite the code we're running.
-        // TODO: get a tighter bound here once code stabilizes.
+    pub fn new(baremetal_rram_offset: u32) -> Result<Self,xous::Error> {
+        Ok(Erasure {
+            traversal: MemoryTraversal::new(baremetal_rram_offset)?,
+            bytes_written: 0,
+        })
+    }
+
+    /// Creates an empty erasure representing no memory.
+    pub fn empty() -> Self {
         Erasure {
-            traversal: MemoryTraversal::new(baremetal_rram_offset),
+            traversal: MemoryTraversal::empty(),
             bytes_written: 0,
         }
     }
@@ -319,7 +346,7 @@ impl Erasure {
         let mut shifter = ShiftXor::<{ Self::KEY_BYTES }>::new(shift_seed, key_block);
         // Start a traversal that *includes* the baremetal rram code (which starts at an offset of
         // 1024, empirically determined).
-        let reader = MemoryTraversal::new(1024);
+        let reader = MemoryTraversal::new(1024)?;
         for block in reader.all_blocks() {
             // safety: we need to ensure no one else takes ownership of this memory while we're
             // reading it. The program is single-threaded and memory is only allocated from SRAM.
@@ -371,7 +398,6 @@ enum State {
 /// keep sending bytes without getting an ack in step 3. This prevents situations where due to
 /// different clock frequencies, one party can fill a serial buffer much faster than the other one
 /// can empty it.
-///
 pub struct OneShotErasure {
     state: State,
     erasure: Erasure,
@@ -396,7 +422,7 @@ impl OneShotErasure {
     pub fn new() -> Self {
         Self {
             state: State::NotStarted,
-            erasure: Erasure::new(0), // will be replaced
+            erasure: Erasure::empty(),
             seed: Vec::with_capacity(Self::SEED_BYTES),
             key_block: Vec::with_capacity(Self::KEY_BYTES),
             rx: Vec::with_capacity(Self::WRITE_INTERVAL),
@@ -405,13 +431,6 @@ impl OneShotErasure {
             ack_stride: 0,
             last_ack: 0,
         }
-    }
-
-    pub fn start(&mut self) {
-        // Send the byte-length of memory to fill, as a 32-bit little endian integer.
-        self.bytes_to_fill = self.erasure.len();
-        send_u32(self.bytes_to_fill as u32);
-        self.state = State::Erase;
     }
 }
 
@@ -431,16 +450,26 @@ impl SerialInteract for OneShotErasure {
     }
 
     fn process(&mut self) {
-        match self.state {
+        match &self.state {
             State::NotStarted => {
                 if self.rx.len() >= 8 {
                     let (chunks, _) = self.rx.as_chunks::<4>();
                     let stride = u32::from_le_bytes(chunks[0]);
                     let rram_offset = u32::from_le_bytes(chunks[1]);
-                    self.erasure = Erasure::new(rram_offset);
                     self.ack_stride = stride as usize;
                     self.rx.clear();
-                    self.start();
+                    match Erasure::new(rram_offset) {
+                        Ok(erasure) => {
+                            self.state = State::Erase;
+                            self.bytes_to_fill = erasure.len();
+                            self.erasure = erasure;
+                            send_u32(0); // "no error" code
+                            send_u32(self.bytes_to_fill as u32);
+                        }
+                        Err(e) => {
+                            send_u32(e.to_usize() as u32);
+                        }
+                    }
                 }
             },
             State::Erase => {
