@@ -1,9 +1,9 @@
 [package]
-name = "baremetal"
+name = "erasure"
 version = "0.1.0"
-authors = ["bunnie <bunnie@kosagi.com>"]
+authors = ["bunnie <bunnie@kosagi.com>", "jade <jade@semiprecious.net>"]
 edition = "2018"
-description = "Baremetal target"
+description = "Baremetal target for provable memory wipe"
 
 [dependencies]
 xous = "0.9.70"
