@@ -1,9 +1,9 @@
+use crate::SerialInteract;
+use crate::erase::Erasure;
 #[allow(unused_imports)]
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use crate::erase::Erasure;
-use crate::SerialInteract;
 
 #[allow(unused_imports)]
 #[cfg(feature = "bao1x")]
@@ -17,9 +17,13 @@ pub struct Error {
     pub message: Option<&'static str>,
 }
 impl Error {
-    pub fn none() -> Self { Self { message: None } }
+    pub fn none() -> Self {
+        Self { message: None }
+    }
 
-    pub fn help(message: &'static str) -> Self { Self { message: Some(message) } }
+    pub fn help(message: &'static str) -> Self {
+        Self { message: Some(message) }
+    }
 }
 
 pub struct Repl {
@@ -47,7 +51,7 @@ impl Repl {
             erasure: Erasure::new(DEFAULT_BAREMETAL_RRAM_OFFSET).unwrap(),
             rx_bin: 0,
             bin_data: Vec::new(),
-            bin_write_count: 0
+            bin_write_count: 0,
         }
     }
 
@@ -57,7 +61,7 @@ impl Repl {
         self.cmdline.push('\n');
         self.do_cmd = true;
     }
-    
+
     fn try_process(&mut self) -> Result<(), Error> {
         if !self.do_cmd {
             return Err(Error::none());
@@ -130,18 +134,21 @@ impl Repl {
                             let hex_str = &args[1];
                             let addr = self.erasure.peek();
                             if args.len() != 2 {
-                                return Err(Error::help(
-                                    "Help: erase write <value>, value is in hex",
-                                ));
+                                return Err(Error::help("Help: erase write <value>, value is in hex"));
                             }
                             let mut data: Vec<u8> = Vec::new();
                             for i in 0..(hex_str.len() / 2) {
-                                let value = u8::from_str_radix(&args[1][2*i..(i+1)*2], 16)
+                                let value = u8::from_str_radix(&args[1][2 * i..(i + 1) * 2], 16)
                                     .map_err(|_| Error::help("Value is in hex, no leading 0x"))?;
                                 data.push(value);
                             }
                             self.erasure.write_slice(data.as_slice());
-                            crate::println!("wrote {:?} bytes starting at {:x} and ending at {:x}", data.len(), addr, self.erasure.peek());
+                            crate::println!(
+                                "wrote {:?} bytes starting at {:x} and ending at {:x}",
+                                data.len(),
+                                addr,
+                                self.erasure.peek()
+                            );
                         }
                         "key" => {
                             if args.len() != 3 {
@@ -151,13 +158,13 @@ impl Repl {
                             }
                             let mut seed: Vec<u8> = Vec::new();
                             for i in 0..(args[1].len() / 2) {
-                                let b = u8::from_str_radix(&args[1][i*2..(i+1)*2], 16)
+                                let b = u8::from_str_radix(&args[1][i * 2..(i + 1) * 2], 16)
                                     .map_err(|_| Error::help("Value is in hex, no leading 0x"))?;
                                 seed.push(b);
                             }
                             let mut key_block: Vec<u8> = Vec::new();
                             for i in 0..(args[2].len() / 2) {
-                                let b = u8::from_str_radix(&args[2][i*2..(i+1)*2], 16)
+                                let b = u8::from_str_radix(&args[2][i * 2..(i + 1) * 2], 16)
                                     .map_err(|_| Error::help("Value is in hex, no leading 0x"))?;
                                 key_block.push(b);
                             }
@@ -166,22 +173,18 @@ impl Repl {
                                     "Help: erase key <seed> <keyblock>, seed and keyblock must be exactly 16 bytes each",
                                 ));
                             }
-                            let key: [u8;16] = self.erasure
+                            let key: [u8; 16] = self
+                                .erasure
                                 .recover_key(seed.as_slice(), key_block.as_slice())
-                                .map_err(|_| Error::help(
-                                        "Problem recovering key!"))?;
+                                .map_err(|_| Error::help("Problem recovering key!"))?;
                             crate::println!("key = {:02x?}", key);
                         }
                         _ => {
-                            return Err(Error::help(
-                                "Help: erase {len, restart, write-bin, write, key}",
-                            ));
+                            return Err(Error::help("Help: erase {len, restart, write-bin, write, key}"));
                         }
                     }
                 } else {
-                    return Err(Error::help(
-                                "Help: erase {len, restart, write-bin, write, key}",
-                    ));
+                    return Err(Error::help("Help: erase {len, restart, write-bin, write, key}"));
                 }
             }
             "echo" => {
@@ -262,5 +265,4 @@ impl SerialInteract for Repl {
             _ => (),
         }
     }
-
 }

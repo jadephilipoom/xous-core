@@ -272,7 +272,9 @@ impl Builder {
         self
     }
 
-    pub fn is_swap_set(&self) -> bool { self.swap.is_some() }
+    pub fn is_swap_set(&self) -> bool {
+        self.swap.is_some()
+    }
 
     /// Set the build stream (debug or release)
     #[allow(dead_code)]
@@ -560,7 +562,9 @@ impl Builder {
     }
 
     /// test if a feature is present
-    pub fn has_feature(&self, feature: &str) -> bool { self.features.contains(&feature.to_string()) }
+    pub fn has_feature(&self, feature: &str) -> bool {
+        self.features.contains(&feature.to_string())
+    }
 
     /// add a feature to be passed on to just the loader
     pub fn add_loader_feature(&mut self, feature: &str) -> &mut Builder {

@@ -5,9 +5,9 @@ extern crate alloc;
 // contains runtime setup
 mod asm;
 
+mod erase;
 mod platform;
 mod repl;
-mod erase;
 mod serial;
 
 use alloc::collections::VecDeque;
@@ -87,11 +87,8 @@ pub unsafe extern "C" fn rust_entry() -> ! {
 
         // fetch characters from the rx buffer
         critical_section::with(|cs| {
-            let mut queue = if use_usb {
-                USB_RX.borrow(cs).borrow_mut()
-            } else {
-                UART_RX.borrow(cs).borrow_mut()
-            };
+            let mut queue =
+                if use_usb { USB_RX.borrow(cs).borrow_mut() } else { UART_RX.borrow(cs).borrow_mut() };
             while let Some(byte) = queue.pop_front() {
                 handler.rx_char(byte);
             }

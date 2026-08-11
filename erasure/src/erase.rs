@@ -28,9 +28,7 @@ trait MemRegion {
     /// Returns a slice representing the region. The caller must ensure no one else owns this region
     /// for the duration of the slice's lifetime.
     unsafe fn as_slice(&self) -> &[u8] {
-        core::slice::from_raw_parts(
-            self.start() as *const u8,
-            self.len())
+        core::slice::from_raw_parts(self.start() as *const u8, self.len())
     }
 }
 
@@ -41,10 +39,7 @@ struct GenericMemRegion {
 
 impl GenericMemRegion {
     fn new(start: usize, len: usize) -> Self {
-        GenericMemRegion {
-            start: start as u32,
-            end: (start+len) as u32,
-        }
+        GenericMemRegion { start: start as u32, end: (start + len) as u32 }
     }
 }
 
@@ -52,7 +47,7 @@ impl MemRegion for GenericMemRegion {
     fn start(&self) -> u32 {
         self.start
     }
-    
+
     fn end(&self) -> u32 {
         self.end
     }
@@ -63,11 +58,7 @@ impl MemRegion for GenericMemRegion {
         }
         // Safety: we need to ensure nothing else takes ownership of this memory during the erasure
         // process.
-        let dst = unsafe {
-            core::slice::from_raw_parts_mut(
-                self.start as *mut u8,
-                data.len())
-        };
+        let dst = unsafe { core::slice::from_raw_parts_mut(self.start as *mut u8, data.len()) };
         dst.copy_from_slice(data);
 
         // Read back to check that the write worked.
@@ -85,7 +76,7 @@ impl MemRegion for GenericMemRegion {
             self.start += nbytes as u32;
             Ok(())
         }
-     }
+    }
 }
 
 struct ReramRegion {
@@ -94,7 +85,7 @@ struct ReramRegion {
 }
 
 impl ReramRegion {
-    fn new(baremetal_rram_offset: u32) -> Result<Self,xous::Error> {
+    fn new(baremetal_rram_offset: u32) -> Result<Self, xous::Error> {
         // Get the writeable section of RRAM that is past boot1 and the specified range reserved for
         // the baremetal image. The baremetal code actually starts at an offset of
         // 1024 from BAREMETAL_START.
@@ -105,7 +96,7 @@ impl ReramRegion {
             let offset = start as usize - utralib::HW_RERAM_MEM;
             let nbytes = Erasure::KEY_BYTES - offset % Erasure::KEY_BYTES;
             start += nbytes;
-            let data = vec![0u8;nbytes];
+            let data = vec![0u8; nbytes];
             let mut rram = Reram::new();
             let len = rram.write_slice(offset, data.as_slice())?;
             if len != data.len() {
@@ -115,10 +106,7 @@ impl ReramRegion {
         if end < start {
             return Err(xous::Error::ParseError);
         }
-        Ok(ReramRegion {
-            start: start as u32,
-            end: end as u32,
-        })
+        Ok(ReramRegion { start: start as u32, end: end as u32 })
     }
 }
 
@@ -126,7 +114,7 @@ impl MemRegion for ReramRegion {
     fn start(&self) -> u32 {
         self.start
     }
-    
+
     fn end(&self) -> u32 {
         self.end
     }
@@ -151,13 +139,10 @@ impl MemRegion for ReramRegion {
             self.start += nbytes as u32;
             Ok(())
         }
-     }
-
+    }
 
     unsafe fn as_slice(&self) -> &[u8] {
-        core::slice::from_raw_parts(
-            self.start as *const u8,
-            self.len())
+        core::slice::from_raw_parts(self.start as *const u8, self.len())
     }
 }
 
@@ -175,7 +160,7 @@ macro_rules! mem {
 }
 
 impl MemoryTraversal {
-    fn new(baremetal_rram_offset: u32) -> Result<Self,xous::Error> {
+    fn new(baremetal_rram_offset: u32) -> Result<Self, xous::Error> {
         let mut blocks: Vec<Box<dyn MemRegion>> = Vec::new();
         blocks.push(Box::new(ReramRegion::new(baremetal_rram_offset)?));
         blocks.push(Box::new(mem!(HW_BIO_IMEM0_MEM, HW_BIO_IMEM0_MEM_LEN)));
@@ -186,18 +171,12 @@ impl MemoryTraversal {
         // seems to block.
         // blocks.push(Box::new(mem!(HW_IFRAM0_MEM, HW_IFRAM0_MEM_LEN)));
         // blocks.push(Box::new(mem!(HW_IFRAM1_MEM, HW_IFRAM1_MEM_LEN)));
-        Ok(MemoryTraversal {
-            idx: 0,
-            blocks: blocks,
-        })
+        Ok(MemoryTraversal { idx: 0, blocks })
     }
 
     /// Creates an empty erasure representing no memory.
     pub fn empty() -> Self {
-        MemoryTraversal {
-            idx: 0,
-            blocks: Vec::new(),
-        }
+        MemoryTraversal { idx: 0, blocks: Vec::new() }
     }
 
     fn len(&self) -> usize {
@@ -248,19 +227,13 @@ impl Erasure {
     // Determines the chunk size for ShiftXor.
     const KEY_BYTES: usize = 16;
 
-    pub fn new(baremetal_rram_offset: u32) -> Result<Self,xous::Error> {
-        Ok(Erasure {
-            traversal: MemoryTraversal::new(baremetal_rram_offset)?,
-            bytes_written: 0,
-        })
+    pub fn new(baremetal_rram_offset: u32) -> Result<Self, xous::Error> {
+        Ok(Erasure { traversal: MemoryTraversal::new(baremetal_rram_offset)?, bytes_written: 0 })
     }
 
     /// Creates an empty erasure representing no memory.
     pub fn empty() -> Self {
-        Erasure {
-            traversal: MemoryTraversal::empty(),
-            bytes_written: 0,
-        }
+        Erasure { traversal: MemoryTraversal::empty(), bytes_written: 0 }
     }
 
     /// Remaining length to fill.
@@ -279,7 +252,7 @@ impl Erasure {
     }
 
     /// Recover the key from the ciphertext, shift seed, and key block.
-    pub fn recover_key(&self, shift_seed: &[u8], key_block: &[u8]) -> Result<[u8;16], xous::Error> {
+    pub fn recover_key(&self, shift_seed: &[u8], key_block: &[u8]) -> Result<[u8; 16], xous::Error> {
         let mut shifter = ShiftXor::<{ Self::KEY_BYTES }>::new(shift_seed, key_block);
         // Start a traversal that *includes* the baremetal rram code.
         let reader = MemoryTraversal::new(0)?;
@@ -293,10 +266,8 @@ impl Erasure {
         }
 
         // Interpret the key as an array.
-        <[u8;16]>::try_from(shifter.key())
-            .map_err(|_| xous::Error::InternalError)
+        <[u8; 16]>::try_from(shifter.key()).map_err(|_| xous::Error::InternalError)
     }
-
 }
 
 /// Convenience helper function for sending numbers over USB/UART.
@@ -375,12 +346,12 @@ impl SerialInteract for OneShotErasure {
         match self.state {
             State::GetSeed => {
                 self.seed.push(c);
-            },
+            }
             State::GetKeyBlock => {
                 self.key_block.push(c);
-            },
+            }
             _ => {
-            self.rx.push(c);
+                self.rx.push(c);
             }
         }
     }
@@ -401,18 +372,18 @@ impl SerialInteract for OneShotErasure {
                             self.erasure = erasure;
                             send_u32(0); // "no error" code
                             send_u32(self.bytes_to_fill as u32);
-
                         }
                         Err(e) => {
                             send_u32(e.to_usize() as u32);
                         }
                     }
                 }
-            },
+            }
             State::Erase => {
                 if self.rx.len() >= Self::WRITE_INTERVAL
                     || self.rx.len() >= self.last_ack + self.ack_stride
-                    || self.rx.len() >= self.bytes_to_fill {
+                    || self.rx.len() >= self.bytes_to_fill
+                {
                     let src = &self.rx[..self.rx.len().min(self.bytes_to_fill)];
                     self.erasure.write_slice(src);
                     self.bytes_written += src.len();
@@ -426,22 +397,21 @@ impl SerialInteract for OneShotErasure {
                         self.state = State::GetSeed;
                     }
                 }
-            },
+            }
             State::GetSeed => {
                 if self.seed.len() == Self::SEED_BYTES {
                     self.state = State::GetKeyBlock;
                 }
-            },
+            }
             State::GetKeyBlock => {
                 if self.key_block.len() == Self::KEY_BYTES {
                     self.state = State::RecoverKey;
                 }
-            },
+            }
             State::RecoverKey => {
                 // Perform key recovery.
-                let key: [u8;16] = self.erasure
-                    .recover_key(self.seed.as_slice(), self.key_block.as_slice())
-                    .unwrap();
+                let key: [u8; 16] =
+                    self.erasure.recover_key(self.seed.as_slice(), self.key_block.as_slice()).unwrap();
 
                 // send the key to the host; despite the name, Uart::putc sends over USB if possible
                 let uart = crate::debug::Uart {};
@@ -449,7 +419,7 @@ impl SerialInteract for OneShotErasure {
                     uart.putc(b);
                 }
                 self.state = State::Done;
-            },
+            }
             State::Done => (),
         }
     }
