@@ -613,18 +613,22 @@ dependencies = [
 name = "baremetal"
 version = "0.1.0"
 dependencies = [
- "aes",
  "bao1x-api 0.1.0",
  "bao1x-hal",
- "cipher",
+ "base64 0.22.1",
  "critical-section",
  "digest 0.10.7",
+ "ed25519-dalek-bao1x",
+ "hex 0.4.3",
+ "hex-literal 1.0.0",
  "linked_list_allocator",
  "riscv",
  "sha2",
  "sha2-bao1x",
  "utralib 0.1.27",
+ "ux-api",
  "xous 0.9.70 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xous-bio-bdma",
  "xous-riscv",
 ]
 
@@ -2327,6 +2331,25 @@ name = "equivalent"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5443807d6dff69373d433ab9ef5378ad8df50ca6298caf15de6e52e24aaf54d5"
+
+[[package]]
+name = "erasure"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "bao1x-api 0.1.0",
+ "bao1x-hal",
+ "cipher",
+ "critical-section",
+ "digest 0.10.7",
+ "linked_list_allocator",
+ "riscv",
+ "sha2",
+ "sha2-bao1x",
+ "utralib 0.1.27",
+ "xous 0.9.70 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xous-riscv",
+]
 
 [[package]]
 name = "errno"
