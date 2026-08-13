@@ -294,12 +294,14 @@ enum State {
 /// 1. Host sends:
 ///    1a. 4 bytes indicating requested ack frequency in bytes.
 ///    1b. 4 bytes indicating the rram offset to start erasure from.
-/// 2. Device sends 4 bytes indicating requested total byte length.
-/// 3. Repeat until total byte length is reached:
+/// 2. Device sends 4 bytes indicating error code (0 = no error).
+///    2a. If there was an error, the protocol does not continue.
+/// 3. Device sends 4 bytes indicating requested total byte length.
+/// 4. Repeat until total byte length is reached:
 ///    3a. Host sends <ack frequency> bytes, or remaining bytes if less.
 ///    3b. Device sends 4 bytes, encoding the total bytes received so far.
-/// 4. Host sends the key and seed blocks.
-/// 5. Device sends the recovered key.
+/// 5. Host sends the key and seed blocks.
+/// 6. Device sends the recovered key.
 ///
 /// Each party must wait for the other's messages before proceeding. For example, the host cannot
 /// keep sending bytes without getting an ack in step 3. This prevents situations where due to
