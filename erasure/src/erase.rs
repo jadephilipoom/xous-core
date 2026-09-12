@@ -145,7 +145,6 @@ impl MemoryTraversal {
     fn new(code_size: usize) -> Result<Self, xous::Error> {
         let mut blocks: Vec<Box<dyn MemRegion>> = Vec::new();
 
-        /*
         // RRAM: get the region past the (block-aligned) end of the code.
         let rram_start_offset = if code_size % Erasure::KEY_BYTES == 0 {
             code_size
@@ -153,7 +152,6 @@ impl MemoryTraversal {
             code_size - code_size % Erasure::KEY_BYTES + Erasure::KEY_BYTES
         };
         blocks.push(Box::new(ReramRegion::new(rram_start_offset)?));
-        */
 
         // SRAM: get the region past the stack, heap, exception scratch, etc.
         let sram_start = platform::SRAM_RESERVED_END;
@@ -161,31 +159,44 @@ impl MemoryTraversal {
             utralib::HW_SRAM_MEM + utralib::HW_SRAM_MEM_LEN - platform::STACK_SIZE_BYTES - sram_start;
         blocks.push(Box::new(GenericMemRegion::new(sram_start, sram_len)));
 
-        // TODO: looks like IFRAM1 holds USB stuff and IFRAM0 holds UART stuff. Should check if
-        // IFRAM0 wiping still works with hard serial and if IFRAM1 wiping works in that case, and
-        // maybe make the range wiped conditional on which interface is enabled. Can use
+        /*
+        let ifram0_start = utralib::HW_IFRAM0_MEM;
+        let ifram0_len = bao1x_hal::board::IFRAM0_RESERVED_PAGE_RANGE[0] * 0x1000;
+        blocks.push(Box::new(GenericMemRegion::new(ifram0_start, ifram0_len)));
+
         // IFRAM{0,1}_RESERVED_PAGE_RANGE to examine these potentially.
 
+        // IFRAM regions: IFRAM0 holds UART pages and IFRAM1 holds USB pages, so select which to
+        // clear depending on which interface is enabled.
+        #[cfg(feature = "bao1x-usb")]
+        {
+            blocks.push(Box::new(mem!(HW_IFRAM0_MEM, HW_IFRAM0_MEM_LEN)));
+        }
+        #[cfg(not(feature = "bao1x-usb"))]
+        {
+            blocks.push(Box::new(mem!(HW_IFRAM1_MEM, HW_IFRAM1_MEM_LEN)));
+        }
+        */
+
         blocks.push(Box::new(mem!(HW_BIO_IMEM0_MEM, HW_BIO_IMEM0_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_BIO_IMEM1_MEM, HW_BIO_IMEM1_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_BIO_IMEM2_MEM, HW_BIO_IMEM2_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_BIO_IMEM3_MEM, HW_BIO_IMEM3_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_IFRAM0_MEM, HW_IFRAM0_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_LKEY_MEM, HW_SEG_LKEY_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_KEY_MEM, HW_SEG_KEY_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_SKEY_MEM, HW_SEG_SKEY_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_SCRT_MEM, HW_SEG_SCRT_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_SOB_MEM, HW_SEG_SOB_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_PCON_MEM, HW_SEG_PCON_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_PKB_MEM, HW_SEG_PKB_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_PIB_MEM, HW_SEG_PIB_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_POB_MEM, HW_SEG_POB_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_PSOB_MEM, HW_SEG_PSOB_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_AKEY_MEM, HW_SEG_AKEY_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_AIB_MEM, HW_SEG_AIB_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_AOB_MEM, HW_SEG_AOB_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_RNGA_MEM, HW_SEG_RNGA_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_RNGB_MEM, HW_SEG_RNGB_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_BIO_IMEM1_MEM, HW_BIO_IMEM1_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_BIO_IMEM2_MEM, HW_BIO_IMEM2_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_BIO_IMEM3_MEM, HW_BIO_IMEM3_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_LKEY_MEM, HW_SEG_LKEY_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_KEY_MEM, HW_SEG_KEY_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_SKEY_MEM, HW_SEG_SKEY_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_SCRT_MEM, HW_SEG_SCRT_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_SOB_MEM, HW_SEG_SOB_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_PCON_MEM, HW_SEG_PCON_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_PKB_MEM, HW_SEG_PKB_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_PIB_MEM, HW_SEG_PIB_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_POB_MEM, HW_SEG_POB_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_PSOB_MEM, HW_SEG_PSOB_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_AKEY_MEM, HW_SEG_AKEY_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_AIB_MEM, HW_SEG_AIB_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_AOB_MEM, HW_SEG_AOB_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_RNGA_MEM, HW_SEG_RNGA_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_RNGB_MEM, HW_SEG_RNGB_MEM_LEN)));
 
         // The following regions interfere with the key recovery process.
         //
