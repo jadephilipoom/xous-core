@@ -145,6 +145,7 @@ impl MemoryTraversal {
     fn new(code_size: usize) -> Result<Self, xous::Error> {
         let mut blocks: Vec<Box<dyn MemRegion>> = Vec::new();
 
+        /*
         // RRAM: get the region past the (block-aligned) end of the code.
         let rram_start_offset = if code_size % Erasure::KEY_BYTES == 0 {
             code_size
@@ -152,6 +153,7 @@ impl MemoryTraversal {
             code_size - code_size % Erasure::KEY_BYTES + Erasure::KEY_BYTES
         };
         blocks.push(Box::new(ReramRegion::new(rram_start_offset)?));
+        */
 
         // SRAM: get the region past the stack, heap, exception scratch, etc.
         let sram_start = platform::SRAM_RESERVED_END;
