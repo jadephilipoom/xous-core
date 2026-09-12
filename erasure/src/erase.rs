@@ -159,24 +159,24 @@ impl MemoryTraversal {
             utralib::HW_SRAM_MEM + utralib::HW_SRAM_MEM_LEN - platform::STACK_SIZE_BYTES - sram_start;
         blocks.push(Box::new(GenericMemRegion::new(sram_start, sram_len)));
 
-        /*
+        // TODO: erase the fictitious stack region?
+
+        // IFRAM0: erase non-reserved pages
         let ifram0_start = utralib::HW_IFRAM0_MEM;
         let ifram0_len = bao1x_hal::board::IFRAM0_RESERVED_PAGE_RANGE[0] * 0x1000;
         blocks.push(Box::new(GenericMemRegion::new(ifram0_start, ifram0_len)));
 
-        // IFRAM{0,1}_RESERVED_PAGE_RANGE to examine these potentially.
+        // dabao only uses IFRAM1 for USB; if USB is not enabled we can erase the whole thing. 
+        #[cfg(all(feature = "board-dabao", not(feature = "bao1x-usb")))]
+        blocks.push(Box::new(mem!(HW_IFRAM1_MEM, HW_IFRAM1_MEM_LEN)));
 
-        // IFRAM regions: IFRAM0 holds UART pages and IFRAM1 holds USB pages, so select which to
-        // clear depending on which interface is enabled.
-        #[cfg(feature = "bao1x-usb")]
+        // otherwise, we have to be more careful I guess
+        #[cfg(any(not(feature = "board-dabao"), feature = "bao1x-usb"))]
         {
-            blocks.push(Box::new(mem!(HW_IFRAM0_MEM, HW_IFRAM0_MEM_LEN)));
+            let ifram1_start = utralib::HW_IFRAM1_MEM;
+            let ifram1_len = bao1x_hal::board::IFRAM1_RESERVED_PAGE_RANGE[0] * 0x1000;
+            blocks.push(Box::new(GenericMemRegion::new(ifram1_start, ifram1_len)));
         }
-        #[cfg(not(feature = "bao1x-usb"))]
-        {
-            blocks.push(Box::new(mem!(HW_IFRAM1_MEM, HW_IFRAM1_MEM_LEN)));
-        }
-        */
 
         blocks.push(Box::new(mem!(HW_BIO_IMEM0_MEM, HW_BIO_IMEM0_MEM_LEN)));
         blocks.push(Box::new(mem!(HW_BIO_IMEM1_MEM, HW_BIO_IMEM1_MEM_LEN)));
