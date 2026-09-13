@@ -84,7 +84,9 @@ impl ReramRegion {
     /// offset must be aligned to the erasure key size.
     fn new(start_offset: usize) -> Result<Self, xous::Error> {
         let start = Self::CODE_START + start_offset;
-        let end = utralib::HW_RERAM_MEM + bao1x_api::RRAM_STORAGE_LEN;
+        // TODO: debugging, revert
+        // let end = utralib::HW_RERAM_MEM + bao1x_api::RRAM_STORAGE_LEN;
+        let end = start + 4096;
         if start_offset % Erasure::KEY_BYTES != 0 || end < start {
             return Err(xous::Error::ParseError);
         }
@@ -112,6 +114,7 @@ impl MemRegion for ReramRegion {
         let mut rram = Reram::new();
         let len = rram.write_slice(offset, data)?;
         if len != data.len() {
+            send_u32(1);
             return Err(xous::Error::InternalError);
         }
         Ok(())
