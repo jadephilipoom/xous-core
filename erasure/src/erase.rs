@@ -55,7 +55,8 @@ impl MemRegion for GenericMemRegion {
         // Read back to check that the write worked.
         bao1x_hal::cache_flush();
         if dst != data {
-            return Err(xous::Error::AccessDenied);
+            // TODO: revert back to access denied
+            return Err(xous::Error::StorageError);
         }
         Ok(())
     }
@@ -148,9 +149,6 @@ impl MemoryTraversal {
     fn new(code_size: usize) -> Result<Self, xous::Error> {
         let mut blocks: Vec<Box<dyn MemRegion>> = Vec::new();
 
-        // TODO: remove
-        blocks.push(Box::new(mem!(HW_BIO_IMEM0_MEM, HW_BIO_IMEM0_MEM_LEN)));
-
         // RRAM: get the region past the (block-aligned) end of the code.
         let rram_start_offset = if code_size % Erasure::KEY_BYTES == 0 {
             code_size
@@ -160,7 +158,6 @@ impl MemoryTraversal {
         blocks.push(Box::new(ReramRegion::new(rram_start_offset)?));
 
         /*
-
         // SRAM: get the region past the stack, heap, exception scratch, etc.
         let sram_start = platform::SRAM_RESERVED_END;
         let sram_len =
@@ -185,7 +182,6 @@ impl MemoryTraversal {
             let ifram1_len = bao1x_hal::board::IFRAM1_RESERVED_PAGE_RANGE[0] * 0x1000;
             blocks.push(Box::new(GenericMemRegion::new(ifram1_start, ifram1_len)));
         }
-
         */
 
         // blocks.push(Box::new(mem!(HW_BIO_IMEM0_MEM, HW_BIO_IMEM0_MEM_LEN)));
