@@ -70,6 +70,11 @@ pub unsafe extern "C" fn rust_entry() -> ! {
     #[cfg(feature = "bao1x-usb")]
     let (mut last_usb_state, mut portsc) = crate::platform::usb::glue::hotplug_usb(&iox);
 
+    // TODO: debugging, maybe not needed
+    critical_section::with(|cs| {
+        UART_RX.borrow(cs).borrow_mut().reserve(1024);
+    });
+
     #[cfg(feature = "bao1x-usb")]
     loop {
         let (new_usb_state, new_portsc) = glue::usb_status();
@@ -120,7 +125,9 @@ pub unsafe extern "C" fn rust_entry() -> ! {
             }
         });
 
-        // process received data
+        // process received characters
         handler.process();
+        
+        // crate::delay(1);
     }
 }

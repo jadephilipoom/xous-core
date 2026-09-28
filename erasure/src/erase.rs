@@ -3,6 +3,8 @@ use alloc::vec::Vec;
 use core::convert::TryFrom;
 
 use bao1x_hal::rram::Reram;
+use bao1x_hal::udma::UartIrq;
+use bao1x_hal::udma::UartChannel;
 
 mod shiftxor;
 use crate::SerialInteract;
@@ -113,7 +115,12 @@ impl MemRegion for ReramRegion {
         }
         let offset = self.start as usize - utralib::HW_RERAM_MEM;
         let mut rram = Reram::new();
+        // disable interrupts temporarily during the RRAM write; otherwise we interrupt to receive
+        // new characters partway through and it causes havoc.
+        let mut uart_irq = UartIrq::new();
+        uart_irq.rx_irq_ena(UartChannel::Uart2, false);
         let len = rram.write_slice(offset, data)?;
+        uart_irq.rx_irq_ena(UartChannel::Uart2, true);
         if len != data.len() {
             send_u32(1);
             return Err(xous::Error::InternalError);
@@ -182,27 +189,27 @@ impl MemoryTraversal {
             let ifram1_len = bao1x_hal::board::IFRAM1_RESERVED_PAGE_RANGE[0] * 0x1000;
             blocks.push(Box::new(GenericMemRegion::new(ifram1_start, ifram1_len)));
         }
-        */
 
-        // blocks.push(Box::new(mem!(HW_BIO_IMEM0_MEM, HW_BIO_IMEM0_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_BIO_IMEM1_MEM, HW_BIO_IMEM1_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_BIO_IMEM2_MEM, HW_BIO_IMEM2_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_BIO_IMEM3_MEM, HW_BIO_IMEM3_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_LKEY_MEM, HW_SEG_LKEY_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_KEY_MEM, HW_SEG_KEY_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_SKEY_MEM, HW_SEG_SKEY_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_SCRT_MEM, HW_SEG_SCRT_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_SOB_MEM, HW_SEG_SOB_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_PCON_MEM, HW_SEG_PCON_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_PKB_MEM, HW_SEG_PKB_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_PIB_MEM, HW_SEG_PIB_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_POB_MEM, HW_SEG_POB_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_PSOB_MEM, HW_SEG_PSOB_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_AKEY_MEM, HW_SEG_AKEY_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_AIB_MEM, HW_SEG_AIB_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_AOB_MEM, HW_SEG_AOB_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_RNGA_MEM, HW_SEG_RNGA_MEM_LEN)));
-        // blocks.push(Box::new(mem!(HW_SEG_RNGB_MEM, HW_SEG_RNGB_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_BIO_IMEM0_MEM, HW_BIO_IMEM0_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_BIO_IMEM1_MEM, HW_BIO_IMEM1_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_BIO_IMEM2_MEM, HW_BIO_IMEM2_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_BIO_IMEM3_MEM, HW_BIO_IMEM3_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_LKEY_MEM, HW_SEG_LKEY_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_KEY_MEM, HW_SEG_KEY_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_SKEY_MEM, HW_SEG_SKEY_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_SCRT_MEM, HW_SEG_SCRT_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_SOB_MEM, HW_SEG_SOB_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_PCON_MEM, HW_SEG_PCON_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_PKB_MEM, HW_SEG_PKB_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_PIB_MEM, HW_SEG_PIB_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_POB_MEM, HW_SEG_POB_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_PSOB_MEM, HW_SEG_PSOB_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_AKEY_MEM, HW_SEG_AKEY_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_AIB_MEM, HW_SEG_AIB_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_AOB_MEM, HW_SEG_AOB_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_RNGA_MEM, HW_SEG_RNGA_MEM_LEN)));
+        blocks.push(Box::new(mem!(HW_SEG_RNGB_MEM, HW_SEG_RNGB_MEM_LEN)));
+        */
 
         // The following regions interfere with the key recovery process.
         //
