@@ -164,7 +164,6 @@ impl MemoryTraversal {
         };
         blocks.push(Box::new(ReramRegion::new(rram_start_offset)?));
 
-        /*
         // SRAM: get the region past the stack, heap, exception scratch, etc.
         let sram_start = platform::SRAM_RESERVED_END;
         let sram_len =
@@ -209,7 +208,6 @@ impl MemoryTraversal {
         blocks.push(Box::new(mem!(HW_SEG_AOB_MEM, HW_SEG_AOB_MEM_LEN)));
         blocks.push(Box::new(mem!(HW_SEG_RNGA_MEM, HW_SEG_RNGA_MEM_LEN)));
         blocks.push(Box::new(mem!(HW_SEG_RNGB_MEM, HW_SEG_RNGB_MEM_LEN)));
-        */
 
         // The following regions interfere with the key recovery process.
         //
@@ -390,12 +388,12 @@ pub struct OneShotErasure {
 }
 
 impl OneShotErasure {
-    const KEY_BYTES: usize = 16;
     // Sizes of seed and key block.
+    const KEY_BYTES: usize = 16;
     const SEED_BYTES: usize = 16;
     // Determines how often we actually write the data. Buffering more data causes more stack usage;
     // buffering less incurs more overhead and internal buffering in the erase procedure.
-    const WRITE_INTERVAL: usize = 256;
+    const WRITE_INTERVAL: usize = 1024;
 
     pub fn new() -> Self {
         Self {
@@ -460,13 +458,14 @@ impl SerialInteract for OneShotErasure {
                     self.bytes_written += src.len();
                     self.bytes_to_fill -= src.len();
                     self.rx.clear();
-                    if self.bytes_written >= self.last_ack + self.ack_stride {
-                        send_u32(self.bytes_written as u32);
-                        self.last_ack += self.ack_stride;
-                    }
                     if self.bytes_to_fill == 0 {
                         self.state = State::GetSeed;
                     }
+                }
+                let bytes_received = self.bytes_written + self.rx.len();
+                if bytes_received >= self.last_ack + self.ack_stride {
+                    send_u32(bytes_received as u32);
+                    self.last_ack += self.ack_stride;
                 }
             }
             State::GetSeed => {

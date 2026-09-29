@@ -117,17 +117,34 @@ pub unsafe extern "C" fn rust_entry() -> ! {
     #[cfg(not(feature = "bao1x-usb"))]
     // do the main loop through only the serial port
     loop {
-        // fetch characters from the rx buffer
-        critical_section::with(|cs| {
-            let mut queue = UART_RX.borrow(cs).borrow_mut();
-            while let Some(byte) = queue.pop_front() {
-                handler.rx_char(byte);
+        // wait until we reach the target byte count or there are no new characters for a short
+        // period, so we don't drop characters during high-speed automated writes
+        let mut count = 0;
+        let mut new_count = 0;
+        loop {
+            critical_section::with(|cs| {
+                let queue = UART_RX.borrow(cs).borrow();
+                new_count = queue.len();
+            });
+            if count == new_count {
+                break;
             }
-        });
+            count = new_count;
+            crate::delay(2);
+        }
+
+        // fetch characters from the rx buffer
+        while count > 0 {
+            critical_section::with(|cs| {
+                let mut queue = UART_RX.borrow(cs).borrow_mut();
+                if let Some(byte) = queue.pop_front() {
+                    handler.rx_char(byte);
+                }
+            });
+            count -= 1;
+        }
 
         // process received characters
         handler.process();
-        
-        // crate::delay(1);
     }
 }
