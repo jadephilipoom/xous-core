@@ -144,7 +144,7 @@ pub unsafe extern "C" fn rust_entry() -> ! {
 
         uart.putc(0x11); // XON: signal host to send again
 
-        // wait for 1ms so we have time to receive characters
+        // wait so we have time to receive characters
         crate::delay(1);
     }
 }

@@ -450,14 +450,13 @@ impl SerialInteract for OneShotErasure {
             }
             State::Erase => {
                 if self.rx.len() >= Self::WRITE_INTERVAL
-                    || self.rx.len() >= self.last_ack + self.ack_stride
                     || self.rx.len() >= self.bytes_to_fill
                 {
-                    let src = &self.rx[..self.rx.len().min(self.bytes_to_fill)];
-                    self.erasure.write_slice(src);
-                    self.bytes_written += src.len();
-                    self.bytes_to_fill -= src.len();
+                    let nbytes = self.rx.len().min(self.bytes_to_fill);
+                    self.erasure.write_slice(&self.rx[..nbytes]);
                     self.rx.clear();
+                    self.bytes_written += nbytes;
+                    self.bytes_to_fill -= nbytes;
                     if self.bytes_to_fill == 0 {
                         self.state = State::GetSeed;
                     }
