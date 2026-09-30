@@ -39,9 +39,11 @@ pub fn uart_irq_handler() {
     loop {
         match uart.getc() {
             Some(c) => {
+                // uart.putc(0x13); // XOFF
                 critical_section::with(|cs| {
                     UART_RX.borrow(cs).borrow_mut().push_back(c);
                 });
+                // uart.putc(0x11); // XON
             }
             _ => break,
         }
@@ -117,21 +119,26 @@ pub unsafe extern "C" fn rust_entry() -> ! {
     #[cfg(not(feature = "bao1x-usb"))]
     // do the main loop through only the serial port
     loop {
+        let uart = crate::debug::Uart {};
         // wait until we reach the target byte count or there are no new characters for a short
         // period, so we don't drop characters during high-speed automated writes
         let mut count = 0;
         let mut new_count = 0;
         loop {
+            // uart.putc(0x13); // XOFF
             critical_section::with(|cs| {
                 let queue = UART_RX.borrow(cs).borrow();
                 new_count = queue.len();
             });
+            // uart.putc(0x11); // XON
             if count == new_count {
                 break;
             }
             count = new_count;
             crate::delay(2);
         }
+
+        uart.putc(0x13); // XOFF: signal host to stop sending
 
         // fetch characters from the rx buffer
         while count > 0 {
@@ -146,5 +153,7 @@ pub unsafe extern "C" fn rust_entry() -> ! {
 
         // process received characters
         handler.process();
+
+        uart.putc(0x11); // XON: signal host to send again
     }
 }
