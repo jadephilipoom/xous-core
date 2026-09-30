@@ -120,40 +120,31 @@ pub unsafe extern "C" fn rust_entry() -> ! {
     // do the main loop through only the serial port
     loop {
         let uart = crate::debug::Uart {};
-        // wait until we reach the target byte count or there are no new characters for a short
-        // period, so we don't drop characters during high-speed automated writes
-        let mut count = 0;
-        let mut new_count = 0;
-        loop {
-            // uart.putc(0x13); // XOFF
-            critical_section::with(|cs| {
-                let queue = UART_RX.borrow(cs).borrow();
-                new_count = queue.len();
-            });
-            // uart.putc(0x11); // XON
-            if count == new_count {
-                break;
-            }
-            count = new_count;
-            crate::delay(2);
-        }
 
         uart.putc(0x13); // XOFF: signal host to stop sending
 
+        // give the host a moment to receive the signal
+        crate::delay(1);
+
         // fetch characters from the rx buffer
-        while count > 0 {
+        let mut done = false;
+        while !done {
             critical_section::with(|cs| {
                 let mut queue = UART_RX.borrow(cs).borrow_mut();
                 if let Some(byte) = queue.pop_front() {
                     handler.rx_char(byte);
+                } else {
+                    done = true;
                 }
             });
-            count -= 1;
         }
 
         // process received characters
         handler.process();
 
         uart.putc(0x11); // XON: signal host to send again
+
+        // wait for 1ms so we have time to receive characters
+        crate::delay(1);
     }
 }
