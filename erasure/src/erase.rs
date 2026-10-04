@@ -164,6 +164,7 @@ impl MemoryTraversal {
         };
         blocks.push(Box::new(ReramRegion::new(rram_start_offset)?));
 
+        /*
         // SRAM: get the region past the stack, heap, exception scratch, etc.
         let sram_start = platform::SRAM_RESERVED_END;
         let sram_len =
@@ -188,6 +189,7 @@ impl MemoryTraversal {
             let ifram1_len = bao1x_hal::board::IFRAM1_RESERVED_PAGE_RANGE[0] * 0x1000;
             blocks.push(Box::new(GenericMemRegion::new(ifram1_start, ifram1_len)));
         }
+        */
 
         blocks.push(Box::new(mem!(HW_BIO_IMEM0_MEM, HW_BIO_IMEM0_MEM_LEN)));
         blocks.push(Box::new(mem!(HW_BIO_IMEM1_MEM, HW_BIO_IMEM1_MEM_LEN)));
@@ -345,6 +347,7 @@ fn send_u32(x: u32) {
     let uart = crate::debug::Uart {};
     for b in x.to_le_bytes() {
         uart.putc(b);
+        crate::delay(1);
     }
 }
 
@@ -393,7 +396,7 @@ impl OneShotErasure {
     const SEED_BYTES: usize = 16;
     // Determines how often we actually write the data. Buffering more data causes more stack usage;
     // buffering less incurs more overhead and internal buffering in the erase procedure.
-    const WRITE_INTERVAL: usize = 1024;
+    const WRITE_INTERVAL: usize = 32;
 
     pub fn new() -> Self {
         Self {
@@ -426,7 +429,8 @@ impl SerialInteract for OneShotErasure {
     }
 
     fn process(&mut self) {
-        match &self.state {
+        let state = &self.state;
+        match state {
             State::NotStarted => {
                 if self.rx.len() >= 8 {
                     let (chunks, _) = self.rx.as_chunks::<4>();
@@ -454,6 +458,13 @@ impl SerialInteract for OneShotErasure {
                 {
                     let nbytes = self.rx.len().min(self.bytes_to_fill);
                     self.erasure.write_slice(&self.rx[..nbytes]);
+                    send_u32(0xaaaaaaaa);
+                    send_u32(self.rx.len() as u32);
+                    let bytes_received = self.bytes_written + self.rx.len();
+                    send_u32(0xbbbbbbbb);
+                    send_u32(bytes_received as u32);
+                    send_u32(0xcccccccc);
+                    send_u32((self.last_ack + self.ack_stride) as u32);
                     self.rx.clear();
                     self.bytes_written += nbytes;
                     self.bytes_to_fill -= nbytes;
@@ -463,6 +474,7 @@ impl SerialInteract for OneShotErasure {
                 }
                 let bytes_received = self.bytes_written + self.rx.len();
                 if bytes_received >= self.last_ack + self.ack_stride {
+                    send_u32(0xdddddddd);
                     send_u32(bytes_received as u32);
                     self.last_ack += self.ack_stride;
                 }
