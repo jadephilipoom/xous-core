@@ -2717,6 +2717,7 @@ dependencies = [
  "bao1x-hal",
  "critical-section",
  "digest 0.10.7",
+ "hex 0.4.3",
  "linked_list_allocator",
  "riscv",
  "sha2 0.10.8",

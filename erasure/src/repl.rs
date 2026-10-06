@@ -173,11 +173,14 @@ impl Repl {
                                 .recover_key(seed.as_slice(), key_block.as_slice())
                                 .map_err(|_| Error::help("Problem recovering key!"))?;
 
-                            let mut key_hex = String::new();
-                            for byte in key {
-                                key_hex.push_str(format!("{:02x}", byte).as_str());
+                            let mut key_hex = [0u8; 32];
+                            hex::encode_to_slice(key, &mut key_hex).unwrap();
+                            let uart = crate::debug::Uart {};
+                            for b in key_hex {
+                                uart.putc(b);
                             }
-                            crate::println!("{}", key_hex);
+                            uart.putc(b'\r');
+                            uart.putc(b'\n');
                         }
                         _ => {
                             return Err(Error::help("Help: erase {len, restart, write-bin, write, key}"));

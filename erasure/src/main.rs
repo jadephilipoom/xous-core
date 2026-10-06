@@ -121,21 +121,11 @@ pub unsafe extern "C" fn rust_entry() -> ! {
     loop {
         let uart = crate::debug::Uart {};
 
-        // wait until there are no new characters for a short period, so we don't drop characters
-        // during high-speed automated writes
-        let mut count = 0;
-        let mut new_count = 0;
-        loop {
-            critical_section::with(|cs| {
-                let queue = UART_RX.borrow(cs).borrow();
-                new_count = queue.len();
-            });
-            if count == new_count {
-                break;
-            }
-            count = new_count;
-            crate::delay(5);
-        }
+        // XOFF: signal host to stop sending
+        uart.putc(0x13);
+
+        // give the host a moment to receive the signal
+        crate::delay(1);
 
         // fetch characters from the rx buffer
         let mut done = false;
@@ -152,5 +142,10 @@ pub unsafe extern "C" fn rust_entry() -> ! {
 
         // process received characters
         handler.process();
+
+        uart.putc(0x11); // XON: signal host to send again
+
+        // wait so we have time to receive more characters
+        crate::delay(2);
     }
 }

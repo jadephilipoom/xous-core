@@ -1,6 +1,7 @@
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::convert::TryFrom;
+use hex;
 
 use bao1x_hal::rram::Reram;
 use bao1x_hal::udma::UartIrq;
@@ -87,9 +88,7 @@ impl ReramRegion {
     /// offset must be aligned to the erasure key size.
     fn new(start_offset: usize) -> Result<Self, xous::Error> {
         let start = Self::CODE_START + start_offset;
-        // TODO: debugging, revert
-        // let end = utralib::HW_RERAM_MEM + bao1x_api::RRAM_STORAGE_LEN;
-        let end = start + 4096;
+        let end = utralib::HW_RERAM_MEM + bao1x_api::RRAM_STORAGE_LEN;
         if start_offset % Erasure::KEY_BYTES != 0 || end < start {
             return Err(xous::Error::ParseError);
         }
@@ -156,6 +155,7 @@ impl MemoryTraversal {
     fn new(code_size: usize) -> Result<Self, xous::Error> {
         let mut blocks: Vec<Box<dyn MemRegion>> = Vec::new();
 
+        /*
         // RRAM: get the region past the (block-aligned) end of the code.
         let rram_start_offset = if code_size % Erasure::KEY_BYTES == 0 {
             code_size
@@ -164,7 +164,6 @@ impl MemoryTraversal {
         };
         blocks.push(Box::new(ReramRegion::new(rram_start_offset)?));
 
-        /*
         // SRAM: get the region past the stack, heap, exception scratch, etc.
         let sram_start = platform::SRAM_RESERVED_END;
         let sram_len =
@@ -345,9 +344,10 @@ impl Erasure {
 /// Convenience helper function for sending numbers over USB/UART.
 fn send_u32(x: u32) {
     let uart = crate::debug::Uart {};
-    for b in x.to_le_bytes() {
+    let mut bs = [0u8;8];
+    hex::encode_to_slice(x.to_le_bytes(), &mut bs).unwrap();
+    for b in bs {
         uart.putc(b);
-        crate::delay(1);
     }
 }
 
@@ -364,20 +364,33 @@ enum State {
 /// a repl-like interface.
 ///
 /// The expected interaction is:
-/// 1. Host sends: 1a. 4 bytes indicating requested ack frequency in bytes. 1b. 4 bytes indicating the rram
-///    offset to start erasure from.
-/// 2. Device sends 4 bytes indicating error code (0 = no error). 2a. If there was an error, the protocol does
-///    not continue.
-/// 3. Device sends 4 bytes indicating requested total byte length.
-/// 4. Repeat until total byte length is reached: 3a. Host sends <ack frequency> bytes, or remaining bytes if
-///    less. 3b. Device sends 4 bytes, encoding the total bytes received so far.
+/// 1. Host sends:
+///     1a. 4 bytes indicating requested ack frequency in bytes.
+///     1b. 4 bytes indicating the rram offset to start erasure from.
+/// 2. Device sends 8 bytes* indicating error code (0 = no error).
+///     2a. If there was an error, the protocol does not continue.
+/// 3. Device sends 8 bytes* indicating requested total byte length.
+/// 4. Repeat until total byte length is reached:
+///     4a. Host sends <ack frequency> bytes, or remaining bytes if less.
+///     4b. Device sends 8 bytes*, encoding the total bytes received so far.
 /// 5. Host sends the key and seed blocks.
-/// 6. Device sends the recovered key.
+/// 6. Device sends the recovered key*.
+///
+/// *All device-sent values are encoded in ASCII hexadecimal. 32-bit values are encoded in
+/// little-endian order.
 ///
 /// Each party must wait for the other's messages before proceeding. For example, the host cannot
-/// keep sending bytes without getting an ack in step 3. This prevents situations where due to
+/// keep sending bytes without getting an ack in step 4. This prevents situations where due to
 /// different clock frequencies, one party can fill a serial buffer much faster than the other one
 /// can empty it.
+///
+/// Flow control should be implemented on the *host side only*. That is, the device does not listen
+/// for XON/XOFF bytes, but it does send them and expect the host to respect them (otherwise UART
+/// interrupts for new characters might get dropped in critical sections and rram writes, where
+/// interrupts are disabled). Software flow control with XON/XOFF is not compatible with pure binary
+/// data, since XON/XOFF bytes can occur by chance.  For this reason, data sent from the device to
+/// the host is encoded as ascii hex characters, while the host sends pure binary data (this is
+/// preferable for performance reasons, since the host sends a high volume of data).
 pub struct OneShotErasure {
     state: State,
     erasure: Erasure,
@@ -396,7 +409,7 @@ impl OneShotErasure {
     const SEED_BYTES: usize = 16;
     // Determines how often we actually write the data. Buffering more data causes more stack usage;
     // buffering less incurs more overhead and internal buffering in the erase procedure.
-    const WRITE_INTERVAL: usize = 32;
+    const WRITE_INTERVAL: usize = 1024;
 
     pub fn new() -> Self {
         Self {
@@ -429,8 +442,7 @@ impl SerialInteract for OneShotErasure {
     }
 
     fn process(&mut self) {
-        let state = &self.state;
-        match state {
+        match &self.state {
             State::NotStarted => {
                 if self.rx.len() >= 8 {
                     let (chunks, _) = self.rx.as_chunks::<4>();
@@ -458,13 +470,6 @@ impl SerialInteract for OneShotErasure {
                 {
                     let nbytes = self.rx.len().min(self.bytes_to_fill);
                     self.erasure.write_slice(&self.rx[..nbytes]);
-                    send_u32(0xaaaaaaaa);
-                    send_u32(self.rx.len() as u32);
-                    let bytes_received = self.bytes_written + self.rx.len();
-                    send_u32(0xbbbbbbbb);
-                    send_u32(bytes_received as u32);
-                    send_u32(0xcccccccc);
-                    send_u32((self.last_ack + self.ack_stride) as u32);
                     self.rx.clear();
                     self.bytes_written += nbytes;
                     self.bytes_to_fill -= nbytes;
@@ -474,7 +479,6 @@ impl SerialInteract for OneShotErasure {
                 }
                 let bytes_received = self.bytes_written + self.rx.len();
                 if bytes_received >= self.last_ack + self.ack_stride {
-                    send_u32(0xdddddddd);
                     send_u32(bytes_received as u32);
                     self.last_ack += self.ack_stride;
                 }
@@ -495,8 +499,10 @@ impl SerialInteract for OneShotErasure {
                     self.erasure.recover_key(self.seed.as_slice(), self.key_block.as_slice()).unwrap();
 
                 // send the key to the host; despite the name, Uart::putc sends over USB if possible
+                let mut key_hex = [0u8; Self::KEY_BYTES * 2];
+                hex::encode_to_slice(key, &mut key_hex).unwrap();
                 let uart = crate::debug::Uart {};
-                for b in key {
+                for b in key_hex {
                     uart.putc(b);
                 }
                 self.state = State::Done;
