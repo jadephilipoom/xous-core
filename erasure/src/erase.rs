@@ -355,7 +355,6 @@ enum State {
     NotStarted,
     Erase,
     GetSeed,
-    GetKeyBlock,
     RecoverKey,
     Done,
 }
@@ -428,17 +427,7 @@ impl OneShotErasure {
 
 impl SerialInteract for OneShotErasure {
     fn rx_char(&mut self, c: u8) {
-        match self.state {
-            State::GetSeed => {
-                self.seed.push(c);
-            }
-            State::GetKeyBlock => {
-                self.key_block.push(c);
-            }
-            _ => {
-                self.rx.push(c);
-            }
-        }
+        self.rx.push(c);
     }
 
     fn process(&mut self) {
@@ -484,12 +473,9 @@ impl SerialInteract for OneShotErasure {
                 }
             }
             State::GetSeed => {
-                if self.seed.len() == Self::SEED_BYTES {
-                    self.state = State::GetKeyBlock;
-                }
-            }
-            State::GetKeyBlock => {
-                if self.key_block.len() == Self::KEY_BYTES {
+                if self.rx.len() == Self::SEED_BYTES + Self::KEY_BYTES {
+                    self.seed.extend_from_slice(&self.rx[..Self::SEED_BYTES]);
+                    self.key_block.extend_from_slice(&self.rx[Self::SEED_BYTES..Self::SEED_BYTES + Self::KEY_BYTES]);
                     self.state = State::RecoverKey;
                 }
             }
