@@ -1,11 +1,11 @@
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::convert::TryFrom;
-use hex;
 
 use bao1x_hal::rram::Reram;
-use bao1x_hal::udma::UartIrq;
 use bao1x_hal::udma::UartChannel;
+use bao1x_hal::udma::UartIrq;
+use hex;
 
 mod shiftxor;
 use crate::SerialInteract;
@@ -174,7 +174,7 @@ impl MemoryTraversal {
         let ifram0_len = bao1x_hal::board::IFRAM0_RESERVED_PAGE_RANGE[0] * 0x1000;
         blocks.push(Box::new(GenericMemRegion::new(ifram0_start, ifram0_len)));
 
-        // dabao only uses IFRAM1 for USB; if USB is not enabled we can erase the whole thing. 
+        // dabao only uses IFRAM1 for USB; if USB is not enabled we can erase the whole thing.
         #[cfg(all(feature = "board-dabao", not(feature = "bao1x-usb")))]
         blocks.push(Box::new(mem!(HW_IFRAM1_MEM, HW_IFRAM1_MEM_LEN)));
 
@@ -340,7 +340,7 @@ impl Erasure {
 /// Convenience helper function for sending numbers over USB/UART.
 fn send_u32(x: u32) {
     let uart = crate::debug::Uart {};
-    let mut bs = [0u8;8];
+    let mut bs = [0u8; 8];
     hex::encode_to_slice(x.to_le_bytes(), &mut bs).unwrap();
     for b in bs {
         uart.putc(b);
@@ -359,15 +359,13 @@ enum State {
 /// a repl-like interface.
 ///
 /// The expected interaction is:
-/// 1. Host sends:
-///     1a. 4 bytes indicating requested ack frequency in bytes.
-///     1b. 4 bytes indicating the rram offset to start erasure from.
-/// 2. Device sends 8 bytes* indicating error code (0 = no error).
-///     2a. If there was an error, the protocol does not continue.
+/// 1. Host sends: 1a. 4 bytes indicating requested ack frequency in bytes. 1b. 4 bytes indicating the rram
+///    offset to start erasure from.
+/// 2. Device sends 8 bytes* indicating error code (0 = no error). 2a. If there was an error, the protocol
+///    does not continue.
 /// 3. Device sends 8 bytes* indicating requested total byte length.
-/// 4. Repeat until total byte length is reached:
-///     4a. Host sends <ack frequency> bytes, or remaining bytes if less.
-///     4b. Device sends 8 bytes*, encoding the total bytes received so far.
+/// 4. Repeat until total byte length is reached: 4a. Host sends <ack frequency> bytes, or remaining bytes if
+///    less. 4b. Device sends 8 bytes*, encoding the total bytes received so far.
 /// 5. Host sends the key and seed blocks.
 /// 6. Device sends the recovered key*.
 ///
@@ -422,9 +420,7 @@ impl OneShotErasure {
 }
 
 impl SerialInteract for OneShotErasure {
-    fn rx_char(&mut self, c: u8) {
-        self.rx.push(c);
-    }
+    fn rx_char(&mut self, c: u8) { self.rx.push(c); }
 
     fn process(&mut self) {
         match &self.state {
@@ -450,9 +446,7 @@ impl SerialInteract for OneShotErasure {
                 }
             }
             State::Erase => {
-                if self.rx.len() >= Self::WRITE_INTERVAL
-                    || self.rx.len() >= self.bytes_to_fill
-                {
+                if self.rx.len() >= Self::WRITE_INTERVAL || self.rx.len() >= self.bytes_to_fill {
                     let nbytes = self.rx.len().min(self.bytes_to_fill);
                     self.erasure.write_slice(&self.rx[..nbytes]);
                     self.rx.clear();
@@ -471,7 +465,8 @@ impl SerialInteract for OneShotErasure {
             State::GetSeed => {
                 if self.rx.len() == Self::SEED_BYTES + Self::KEY_BYTES {
                     self.seed.extend_from_slice(&self.rx[..Self::SEED_BYTES]);
-                    self.key_block.extend_from_slice(&self.rx[Self::SEED_BYTES..Self::SEED_BYTES + Self::KEY_BYTES]);
+                    self.key_block
+                        .extend_from_slice(&self.rx[Self::SEED_BYTES..Self::SEED_BYTES + Self::KEY_BYTES]);
                     self.state = State::RecoverKey;
                 }
             }
