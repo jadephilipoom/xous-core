@@ -58,8 +58,7 @@ impl MemRegion for GenericMemRegion {
         // Read back to check that the write worked.
         bao1x_hal::cache_flush();
         if dst != data {
-            // TODO: revert back to access denied
-            return Err(xous::Error::StorageError);
+            return Err(xous::Error::AccessDenied);
         }
         Ok(())
     }

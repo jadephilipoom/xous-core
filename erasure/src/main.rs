@@ -39,11 +39,9 @@ pub fn uart_irq_handler() {
     loop {
         match uart.getc() {
             Some(c) => {
-                // uart.putc(0x13); // XOFF
                 critical_section::with(|cs| {
                     UART_RX.borrow(cs).borrow_mut().push_back(c);
                 });
-                // uart.putc(0x11); // XON
             }
             _ => break,
         }
@@ -71,11 +69,6 @@ pub unsafe extern "C" fn rust_entry() -> ! {
     let iox = Iox::new(utra::iox::HW_IOX_BASE as *mut u32);
     #[cfg(feature = "bao1x-usb")]
     let (mut last_usb_state, mut portsc) = crate::platform::usb::glue::hotplug_usb(&iox);
-
-    // TODO: debugging, maybe not needed
-    critical_section::with(|cs| {
-        UART_RX.borrow(cs).borrow_mut().reserve(1024);
-    });
 
     #[cfg(feature = "bao1x-usb")]
     loop {
