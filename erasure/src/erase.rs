@@ -464,7 +464,7 @@ impl SerialInteract for OneShotErasure {
                     }
                 }
                 let bytes_received = self.bytes_written + self.rx.len();
-                if bytes_received >= self.last_ack + self.ack_stride {
+                if bytes_received >= self.last_ack + self.ack_stride || self.bytes_to_fill == 0 {
                     send_u32(bytes_received as u32);
                     self.last_ack += self.ack_stride;
                 }
