@@ -219,17 +219,16 @@ impl SerialInteract for Repl {
         if self.rx_bin > 0 {
             self.bin_data.push(c);
             self.rx_bin -= 1;
-            if self.bin_data.len() >= BIN_DATA_WRITE_INTERVAL {
-                self.erasure.write_slice(&self.bin_data);
-                self.bin_write_count += self.bin_data.len();
-                self.bin_data.clear();
-            }
             if self.rx_bin == 0 {
-                self.erasure.write_slice(self.bin_data.as_slice());
+                self.erasure.write_slice(&self.bin_data);
                 self.bin_write_count += self.bin_data.len();
                 crate::println!("wrote {:?} bytes", self.bin_write_count);
                 self.bin_data.clear();
                 self.bin_write_count = 0;
+            } else if self.bin_data.len() >= BIN_DATA_WRITE_INTERVAL {
+                self.erasure.write_slice(&self.bin_data);
+                self.bin_write_count += self.bin_data.len();
+                self.bin_data.clear();
             }
             return;
         }
