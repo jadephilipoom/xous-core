@@ -779,7 +779,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             builder.add_loader_feature(board);
             // builder.add_loader_feature("bao1x-usb");
             // Uncomment to get an interactive repl for erasure (helpful for debugging).
-            builder.add_loader_feature("repl");
+            // builder.add_loader_feature("repl");
             let sigblock_size = bao1x_api::signatures::SIGBLOCK_LEN;
             update_flash_origin(
                 "erasure/src/platform/bao1x/link.x",

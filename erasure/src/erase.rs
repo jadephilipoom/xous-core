@@ -121,7 +121,6 @@ impl MemRegion for ReramRegion {
         let len = rram.write_slice(offset, data)?;
         uart_irq.rx_irq_ena(UartChannel::Uart2, true);
         if len != data.len() {
-            send_u32(1);
             return Err(xous::Error::InternalError);
         }
         Ok(())
@@ -461,12 +460,11 @@ impl SerialInteract for OneShotErasure {
                     self.bytes_written += nbytes;
                     self.bytes_to_fill -= nbytes;
                     if self.bytes_to_fill == 0 {
-                        send_u32(self.bytes_written as u32);
                         self.state = State::GetSeed;
                     }
                 }
                 let bytes_received = self.bytes_written + self.rx.len();
-                if (bytes_received >= self.last_ack + self.ack_stride) {
+                if bytes_received >= self.last_ack + self.ack_stride {
                     send_u32(bytes_received as u32);
                     self.last_ack += self.ack_stride;
                 }
